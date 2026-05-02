@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime
+from sqlalchemy.sql import func
 from app.database import Base
 
 
@@ -17,3 +18,4 @@ class Failure(Base):
     stack_trace = Column(Text, nullable=True)
     recommendation = Column(Text, nullable=True)
     developer_alert = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

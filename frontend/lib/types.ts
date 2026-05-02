@@ -11,6 +11,7 @@ export type Failure = {
   stack_trace?: string | null;
   recommendation?: string | null;
   developer_alert: boolean;
+  created_at?: string | null;
 };
 
 export type HealingAction = {

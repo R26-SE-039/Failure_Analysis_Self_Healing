@@ -1,4 +1,5 @@
 from typing import Optional
+from datetime import datetime
 from pydantic import BaseModel
 
 
@@ -22,6 +23,7 @@ class FailureCreate(FailureBase):
 
 class FailureResponse(FailureBase):
     id: int
+    created_at: Optional[datetime] = None
 
     class Config:
         orm_mode = True

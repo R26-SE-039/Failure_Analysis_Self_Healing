@@ -24,6 +24,25 @@ export default async function AnalyticsPage() {
     (item) => item.risk_level.toLowerCase() === "high"
   ).length;
 
+  // Build live risk distribution for the chart
+  const riskDistribution = [
+    {
+      name: "High",
+      value: flakyTests.filter((t) => t.risk_level.toLowerCase() === "high").length,
+      color: "#ef4444",
+    },
+    {
+      name: "Medium",
+      value: flakyTests.filter((t) => t.risk_level.toLowerCase() === "medium").length,
+      color: "#f59e0b",
+    },
+    {
+      name: "Low",
+      value: flakyTests.filter((t) => t.risk_level.toLowerCase() === "low").length,
+      color: "#22c55e",
+    },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-3">
@@ -70,7 +89,7 @@ export default async function AnalyticsPage() {
                     <td className="py-3">{item.test_code}</td>
                     <td className="py-3">{item.test_name}</td>
                     <td className="py-3">{item.instability_score}</td>
-                    <td className="py-3">{item.recent_pattern}</td>
+                    <td className="py-3 font-mono text-xs">{item.recent_pattern}</td>
                     <td className="py-3">
                       <StatusBadge label={item.risk_level} type="risk" />
                     </td>
@@ -93,7 +112,7 @@ export default async function AnalyticsPage() {
             Predicted flaky test risk levels
           </p>
           <div className="mt-4">
-            <FlakyRiskChart />
+            <FlakyRiskChart data={riskDistribution} />
           </div>
         </div>
       </div>
