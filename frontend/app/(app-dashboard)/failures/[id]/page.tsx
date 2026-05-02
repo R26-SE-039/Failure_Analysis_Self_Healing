@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { fetchFailureById } from "@/lib/api";
 import { Failure } from "@/lib/types";
+import FailureActionButtons from "@/components/failure-action-buttons";
 
 type FailureDetailsPageProps = {
   params: Promise<{
@@ -86,14 +87,7 @@ export default async function FailureDetailsPage({
             {failure.recommendation || "No recommendation available."}
           </p>
 
-          <div className="mt-6 flex gap-3">
-            <button className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white">
-              Apply Healing
-            </button>
-            <button className="rounded-lg bg-[var(--danger)] px-4 py-2 text-white">
-              Notify Developer
-            </button>
-          </div>
+          <FailureActionButtons failure={failure} />
         </div>
       </div>
 

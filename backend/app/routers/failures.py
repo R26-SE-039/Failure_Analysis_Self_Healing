@@ -29,3 +29,23 @@ def create_failure(payload: FailureCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(failure)
     return failure
+
+
+@router.patch("/{test_id}/heal", response_model=FailureResponse)
+def heal_failure(test_id: str, db: Session = Depends(get_db)):
+    failure = db.query(Failure).filter(Failure.test_id == test_id).first()
+    if not failure:
+        raise HTTPException(status_code=404, detail="Failure not found")
+    
+    failure.status = "HEALED"
+    failure.healing = "Applied"
+    
+    # Also update the corresponding healing action
+    from app.models.healing import HealingAction
+    healing_action = db.query(HealingAction).filter(HealingAction.failure_test_id == test_id).first()
+    if healing_action:
+        healing_action.status = "Applied"
+        
+    db.commit()
+    db.refresh(failure)
+    return failure
