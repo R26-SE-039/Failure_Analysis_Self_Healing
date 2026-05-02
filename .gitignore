@@ -1,0 +1,32 @@
+# Environments
+venv/
+env/
+.env
+
+# Node
+node_modules/
+dist/
+.next/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs and databases
+*.log
+*.sqlite
+*.db
+
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+
+# Datasets / Large files (Optional, uncomment if you don't want datasets in git)
+# research/data/*.csv
