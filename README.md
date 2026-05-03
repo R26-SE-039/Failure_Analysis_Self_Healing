@@ -168,6 +168,7 @@ failure-analysis-self-healing/
     │   └── final_training_dataset.csv   # Synthetic labeled training dataset
     ├── models/                          # Saved model artifacts
     ├── outputs/                         # Training reports
+    ├── model_training.ipynb             # Jupyter Notebook for Training & Evaluation
     └── scripts/
         ├── generate_synthetic_dataset.py # Dataset generation script
         ├── train_model.py               # Full ML training pipeline
@@ -175,6 +176,7 @@ failure-analysis-self-healing/
         ├── 02_baseline_text_classification.py
         └── 03_random_forest_structured.py
 ```
+
 
 ---
 
