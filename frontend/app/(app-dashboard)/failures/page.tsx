@@ -2,9 +2,23 @@ import Link from "next/link";
 import StatusBadge from "@/components/status-badge";
 import { fetchFailures } from "@/lib/api";
 import { Failure } from "@/lib/types";
+import DeleteFailureButton from "@/components/delete-failure-button";
 
-export default async function FailuresPage() {
-  const failures: Failure[] = await fetchFailures();
+export default async function FailuresPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const params = await searchParams;
+  const page = parseInt(params.page || "1");
+  const limit = 10;
+  
+  const response = await fetchFailures(page, limit);
+  // Ensure we safely handle the case where backend returns list vs paginated dict
+  const isPaginated = !Array.isArray(response);
+  const failures: Failure[] = isPaginated ? response.data : response;
+  const total = isPaginated ? response.total : failures.length;
+  const totalPages = Math.ceil(total / limit);
 
   return (
     <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
@@ -54,12 +68,15 @@ export default async function FailuresPage() {
                   <StatusBadge label={item.healing || "None"} type="healing" />
                 </td>
                 <td className="py-4">
-                  <Link
-                    href={`/failures/${item.test_id}`}
-                    className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-700 hover:shadow-sm transition-all shadow-indigo-500/10"
-                  >
-                    View Details
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link
+                      href={`/failures/${item.test_id}`}
+                      className="rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-indigo-700 hover:shadow-sm transition-all shadow-indigo-500/10"
+                    >
+                      View Details
+                    </Link>
+                    <DeleteFailureButton testId={item.test_id} />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -70,6 +87,37 @@ export default async function FailuresPage() {
           <p className="py-6 text-center text-sm font-medium text-[var(--muted)]">
             No failure records found.
           </p>
+        )}
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-[var(--border)] pt-4 mt-4">
+            <span className="text-xs font-bold text-[var(--muted)]">
+              Showing page {page} of {totalPages} ({total} total records)
+            </span>
+            <div className="flex gap-2">
+              <Link
+                href={`/failures?page=${page - 1}`}
+                className={`rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-bold transition ${
+                  page <= 1
+                    ? "pointer-events-none opacity-50 bg-slate-50 text-[var(--muted)]"
+                    : "hover:bg-[var(--card-2)] text-[var(--foreground)]"
+                }`}
+              >
+                Previous
+              </Link>
+              <Link
+                href={`/failures?page=${page + 1}`}
+                className={`rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-bold transition ${
+                  page >= totalPages
+                    ? "pointer-events-none opacity-50 bg-slate-50 text-[var(--muted)]"
+                    : "hover:bg-[var(--card-2)] text-[var(--foreground)]"
+                }`}
+              >
+                Next
+              </Link>
+            </div>
+          </div>
         )}
       </div>
     </div>

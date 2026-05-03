@@ -2,11 +2,25 @@ import StatusBadge from "@/components/status-badge";
 import FlakyRiskChart from "@/components/flaky-risk-chart";
 import { fetchFlakyTests } from "@/lib/api";
 import { FlakyTest } from "@/lib/types";
+import DeleteRecordButton from "@/components/delete-record-button";
+import Link from "next/link";
 
-export default async function AnalyticsPage() {
-  const flakyTests: FlakyTest[] = await fetchFlakyTests();
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const params = await searchParams;
+  const page = parseInt(params.page || "1");
+  const limit = 10;
 
-  const totalTests = flakyTests.length;
+  const response = await fetchFlakyTests(page, limit);
+  const isPaginated = !Array.isArray(response);
+  const flakyTests: FlakyTest[] = isPaginated ? response.data : response;
+  const total = isPaginated ? response.total : flakyTests.length;
+  const totalPages = Math.ceil(total / limit);
+
+  const totalTests = total;
 
   const numericScores = flakyTests
     .map((item) => parseInt(item.instability_score.replace("%", ""), 10))
@@ -84,6 +98,7 @@ export default async function AnalyticsPage() {
                   <th className="py-3">Instability</th>
                   <th className="py-3">Pattern</th>
                   <th className="py-3">Risk Level</th>
+                  <th className="py-3">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -99,6 +114,9 @@ export default async function AnalyticsPage() {
                     <td className="py-4">
                       <StatusBadge label={item.risk_level} type="risk" />
                     </td>
+                    <td className="py-4">
+                      <DeleteRecordButton endpoint="analytics/flaky-tests" recordId={item.test_code} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -108,6 +126,37 @@ export default async function AnalyticsPage() {
               <p className="py-6 text-center text-sm font-medium text-[var(--muted)]">
                 No flaky test analytics found.
               </p>
+            )}
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-[var(--border)] pt-4 mt-4">
+                <span className="text-xs font-bold text-[var(--muted)]">
+                  Showing page {page} of {totalPages} ({total} total records)
+                </span>
+                <div className="flex gap-2">
+                  <Link
+                    href={`/analytics?page=${page - 1}`}
+                    className={`rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-bold transition ${
+                      page <= 1
+                        ? "pointer-events-none opacity-50 bg-slate-50 text-[var(--muted)]"
+                        : "hover:bg-[var(--card-2)] text-[var(--foreground)]"
+                    }`}
+                  >
+                    Previous
+                  </Link>
+                  <Link
+                    href={`/analytics?page=${page + 1}`}
+                    className={`rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-bold transition ${
+                      page >= totalPages
+                        ? "pointer-events-none opacity-50 bg-slate-50 text-[var(--muted)]"
+                        : "hover:bg-[var(--card-2)] text-[var(--foreground)]"
+                    }`}
+                  >
+                    Next
+                  </Link>
+                </div>
+              </div>
             )}
           </div>
         </div>

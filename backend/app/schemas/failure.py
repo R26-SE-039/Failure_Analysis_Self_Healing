@@ -27,3 +27,9 @@ class FailureResponse(FailureBase):
 
     class Config:
         orm_mode = True
+
+class PaginatedFailuresResponse(BaseModel):
+    data: list[FailureResponse]
+    total: int
+    page: int
+    limit: int

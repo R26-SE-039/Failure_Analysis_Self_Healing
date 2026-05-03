@@ -18,3 +18,9 @@ class NotificationResponse(NotificationBase):
 
     class Config:
         orm_mode = True
+
+class PaginatedNotificationResponse(BaseModel):
+    data: list[NotificationResponse]
+    total: int
+    page: int
+    limit: int

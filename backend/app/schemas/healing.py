@@ -20,3 +20,9 @@ class HealingResponse(HealingBase):
 
     class Config:
         orm_mode = True
+
+class PaginatedHealingResponse(BaseModel):
+    data: list[HealingResponse]
+    total: int
+    page: int
+    limit: int

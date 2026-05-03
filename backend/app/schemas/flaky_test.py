@@ -18,3 +18,9 @@ class FlakyTestResponse(FlakyTestBase):
 
     class Config:
         orm_mode = True
+
+class PaginatedFlakyTestResponse(BaseModel):
+    data: list[FlakyTestResponse]
+    total: int
+    page: int
+    limit: int

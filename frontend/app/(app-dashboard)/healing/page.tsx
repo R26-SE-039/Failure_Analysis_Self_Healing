@@ -1,9 +1,23 @@
 import StatusBadge from "@/components/status-badge";
 import { fetchHealingActions } from "@/lib/api";
 import { HealingAction } from "@/lib/types";
+import DeleteRecordButton from "@/components/delete-record-button";
+import Link from "next/link";
 
-export default async function HealingPage() {
-  const healingActions: HealingAction[] = await fetchHealingActions();
+export default async function HealingPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
+  const params = await searchParams;
+  const page = parseInt(params.page || "1");
+  const limit = 10;
+
+  const response = await fetchHealingActions(page, limit);
+  const isPaginated = !Array.isArray(response);
+  const healingActions: HealingAction[] = isPaginated ? response.data : response;
+  const total = isPaginated ? response.total : healingActions.length;
+  const totalPages = Math.ceil(total / limit);
 
   return (
     <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
@@ -32,6 +46,7 @@ export default async function HealingPage() {
               <th className="py-3">Old Value</th>
               <th className="py-3">New Value</th>
               <th className="py-3">Status</th>
+              <th className="py-3">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -49,6 +64,9 @@ export default async function HealingPage() {
                 <td className="py-4">
                   <StatusBadge label={item.status} type="healing" />
                 </td>
+                <td className="py-4">
+                  <DeleteRecordButton endpoint="healing" recordId={item.healing_id} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -58,6 +76,37 @@ export default async function HealingPage() {
           <p className="py-6 text-center text-sm font-medium text-[var(--muted)]">
             No healing actions found.
           </p>
+        )}
+
+        {/* Pagination Controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-[var(--border)] pt-4 mt-4">
+            <span className="text-xs font-bold text-[var(--muted)]">
+              Showing page {page} of {totalPages} ({total} total records)
+            </span>
+            <div className="flex gap-2">
+              <Link
+                href={`/healing?page=${page - 1}`}
+                className={`rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-bold transition ${
+                  page <= 1
+                    ? "pointer-events-none opacity-50 bg-slate-50 text-[var(--muted)]"
+                    : "hover:bg-[var(--card-2)] text-[var(--foreground)]"
+                }`}
+              >
+                Previous
+              </Link>
+              <Link
+                href={`/healing?page=${page + 1}`}
+                className={`rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-bold transition ${
+                  page >= totalPages
+                    ? "pointer-events-none opacity-50 bg-slate-50 text-[var(--muted)]"
+                    : "hover:bg-[var(--card-2)] text-[var(--foreground)]"
+                }`}
+              >
+                Next
+              </Link>
+            </div>
+          </div>
         )}
       </div>
     </div>
