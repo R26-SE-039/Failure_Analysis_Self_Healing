@@ -1,38 +1,56 @@
 import { fetchNotifications } from "@/lib/api";
 import { Notification } from "@/lib/types";
+import { BellRing } from "lucide-react";
 
 export default async function NotificationsPage() {
   const notifications: Notification[] = await fetchNotifications();
 
   return (
-    <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-      <h3 className="text-lg font-semibold">Developer Notifications</h3>
-      <p className="mt-1 text-sm text-[var(--muted)]">
-        Failures that likely require developer or environment-level attention
-      </p>
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-sm">
+      <div className="border-b border-[var(--border)] pb-4 mb-4 flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-bold text-[var(--foreground)] tracking-tight">
+            Developer Notifications
+          </h3>
+          <p className="text-xs font-medium text-[var(--muted)]">
+            Failures that likely require developer or environment-level attention
+          </p>
+        </div>
+        <span className="text-xs font-bold bg-amber-50 border border-amber-100/50 text-amber-700 rounded-full px-3 py-1 flex items-center gap-1">
+          <BellRing size={12} className="animate-bounce" />
+          Alerts
+        </span>
+      </div>
 
-      <div className="mt-4 space-y-4">
+      <div className="mt-6 space-y-4">
         {notifications.map((item) => (
           <div
             key={item.id}
-            className="rounded-xl border border-[var(--border)] bg-[var(--card-2)] p-4"
+            className="rounded-2xl border border-[var(--border)] bg-[var(--card-2)] p-5 transition hover:border-indigo-100 flex flex-col gap-2 relative overflow-hidden"
           >
-            <h4 className="text-base font-semibold">{item.test_name}</h4>
-            <p className="mt-2 text-sm text-[var(--muted)]">
-              Failure ID: {item.failure_test_id}
+            <div className="absolute top-0 left-0 w-1 h-full bg-amber-500/80" />
+            <div className="flex justify-between items-start">
+              <h4 className="text-base font-bold text-[var(--foreground)]">{item.test_name}</h4>
+              <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-xl border border-amber-100/50">
+                {item.target}
+              </span>
+            </div>
+            <div className="grid md:grid-cols-2 gap-2 text-xs font-medium text-[var(--muted)] mt-1">
+              <p>
+                Failure ID: <span className="font-mono text-indigo-600 font-bold">{item.failure_test_id}</span>
+              </p>
+              <p>
+                Predicted Root Cause: <span className="font-bold text-slate-700">{item.root_cause}</span>
+              </p>
+            </div>
+            <p className="mt-2 text-sm text-[var(--foreground)] font-medium leading-relaxed bg-white/60 p-3 rounded-xl border border-[var(--border)]/30">
+              {item.message}
             </p>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Root Cause: {item.root_cause}
-            </p>
-            <p className="mt-1 text-sm text-[var(--muted)]">
-              Target: {item.target}
-            </p>
-            <p className="mt-2 text-sm">{item.message}</p>
           </div>
         ))}
 
         {notifications.length === 0 && (
-          <p className="text-sm text-[var(--muted)]">
+          <p className="py-6 text-center text-sm font-medium text-[var(--muted)]">
             No developer alerts at the moment.
           </p>
         )}
