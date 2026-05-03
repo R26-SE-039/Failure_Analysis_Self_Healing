@@ -5,7 +5,7 @@ import FailureActionButtons from "@/components/failure-action-buttons";
 
 type FailureDetailsPageProps = {
   params: Promise<{
-    id: string;
+    id: string | string[];
   }>;
 };
 
@@ -13,11 +13,12 @@ export default async function FailureDetailsPage({
   params,
 }: FailureDetailsPageProps) {
   const { id } = await params;
+  const failureId = Array.isArray(id) ? id.join("/") : id;
 
   let failure: Failure | null = null;
 
   try {
-    failure = await fetchFailureById(id);
+    failure = await fetchFailureById(failureId);
   } catch {
     failure = null;
   }
