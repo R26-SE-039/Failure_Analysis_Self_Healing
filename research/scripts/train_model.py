@@ -6,7 +6,6 @@ Trains the root cause classification model for NEXTGEN QA.
 Models trained:
   - Random Forest
   - Gradient Boosting
-  - Ensemble (Voting Classifier)
 
 Features:
   - TF-IDF on error_message (500 features)
@@ -18,12 +17,8 @@ Target: root_cause (6 classes)
 Imbalance handling: class_weight='balanced' + SMOTE on minority classes
 
 Output saved to:
-  research/models/classifier.pkl
-  research/models/vectorizer_msg.pkl
-  research/models/vectorizer_trace.pkl
-  research/models/label_encoder.pkl
-  research/models/metrics.json
-  (also copied to services/ml-service/models/)
+  research/models/ (Research artifacts)
+  models/ (Production/Root artifacts for Backend)
 """
 
 import os, sys, json, shutil
@@ -33,7 +28,7 @@ import joblib
 import warnings
 warnings.filterwarnings("ignore")
 
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, VotingClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -52,10 +47,10 @@ from collections import Counter
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR    = os.path.join(BASE_DIR, "data")
 MODELS_DIR  = os.path.join(BASE_DIR, "models")
-SERVICES_ML = os.path.join(os.path.dirname(BASE_DIR), "services", "ml-service", "models")
+ROOT_MODELS = os.path.join(os.path.dirname(BASE_DIR), "models")
 
 os.makedirs(MODELS_DIR, exist_ok=True)
-os.makedirs(SERVICES_ML, exist_ok=True)
+os.makedirs(ROOT_MODELS, exist_ok=True)
 
 DATASET = os.path.join(DATA_DIR, "final_training_dataset.csv")
 
@@ -194,21 +189,10 @@ gb.fit(X_train, y_train)
 gb_acc = accuracy_score(y_test, gb.predict(X_test))
 print(f"  Gradient Boosting accuracy: {gb_acc:.4f}")
 
-# Ensemble
-print("  Training Voting Ensemble...")
-ensemble = VotingClassifier(
-    estimators=[("rf", rf), ("gb", gb)],
-    voting="soft"
-)
-ensemble.fit(X_train, y_train)
-ens_acc = accuracy_score(y_test, ensemble.predict(X_test))
-print(f"  Ensemble accuracy: {ens_acc:.4f}")
-
 # Pick best model
 best_name, best_model, best_acc = max(
     [("RandomForest", rf, rf_acc),
-     ("GradientBoosting", gb, gb_acc),
-     ("Ensemble", ensemble, ens_acc)],
+     ("GradientBoosting", gb, gb_acc)],
     key=lambda x: x[2]
 )
 print(f"\n  Best model: {best_name} (accuracy={best_acc:.4f})")
@@ -246,7 +230,6 @@ overall_metrics = {
     "all_models": {
         "RandomForest":     round(rf_acc, 4),
         "GradientBoosting": round(gb_acc, 4),
-        "Ensemble":         round(ens_acc, 4),
     }
 }
 
@@ -276,15 +259,15 @@ with open(metrics_path, "w") as f:
     json.dump(overall_metrics, f, indent=2)
 print(f"  Saved metrics.json")
 
-# Copy to services/ml-service/models/
-print(f"\n  Copying artifacts to services/ml-service/models/...")
+# Copy to root models/ folder (consumed by Backend)
+print(f"\n  Synchronizing artifacts with root models/ directory...")
 for fname in artifacts.keys():
     src = os.path.join(MODELS_DIR, fname)
-    dst = os.path.join(SERVICES_ML, fname)
+    dst = os.path.join(ROOT_MODELS, fname)
     if os.path.exists(src):
         shutil.copy2(src, dst)
-shutil.copy2(metrics_path, os.path.join(SERVICES_ML, "metrics.json"))
-print(f"  Done.")
+shutil.copy2(metrics_path, os.path.join(ROOT_MODELS, "metrics.json"))
+print(f"  Done. System is now using the latest trained model.")
 
 print("\n" + "=" * 60)
 print(f"  Training complete!")
