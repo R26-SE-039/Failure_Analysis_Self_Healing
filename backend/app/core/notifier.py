@@ -1,5 +1,5 @@
 """
-alert_router.py — Notification Service
+notifier.py — Core Logic
 Routes failure alerts to the correct stakeholder target.
 """
 import uuid

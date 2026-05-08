@@ -1,7 +1,6 @@
 """
-healing_engine.py — Healing Service
-Determines the appropriate repair strategy based on root_cause
-and delegates to the correct strategy module.
+healing_engine.py — Core Logic
+Determines the appropriate repair strategy based on root_cause.
 """
 import re
 import uuid

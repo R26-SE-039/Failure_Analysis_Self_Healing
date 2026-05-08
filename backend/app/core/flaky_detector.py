@@ -1,7 +1,6 @@
 """
-flaky_detector.py — Analytics Service
-Predicts flaky test risk based on execution metadata using
-rule-based heuristics + simple ML scoring.
+flaky_detector.py — Core Logic
+Predicts flaky test risk based on execution metadata.
 """
 import re
 from typing import Optional

@@ -1,6 +1,6 @@
 """
-classifier.py  — ML Service
-Loads the trained model artifacts and exposes prediction logic.
+ml_classifier.py  — Core Logic
+Loads the trained model artifacts and exposes prediction logic locally.
 """
 import os, json
 import numpy as np
@@ -9,7 +9,11 @@ from scipy.sparse import hstack, csr_matrix
 from typing import Optional
 
 
-MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "models")
+# The models directory is at the project root
+# __file__ is backend/app/core/ml_classifier.py
+# 4 dirnames = root
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 # Lazy-load globals
 _classifier    = None
@@ -35,11 +39,11 @@ def load_models():
             with open(metrics_path) as f:
                 _metrics = json.load(f)
         _ready = True
-        print("[ML Service] Models loaded successfully.")
+        print("[Core ML] Models loaded successfully from root /models.")
     except Exception as e:
         _error = str(e)
         _ready = False
-        print(f"[ML Service] WARNING: Models not loaded — {e}")
+        print(f"[Core ML] WARNING: Models not loaded — {e}")
 
 
 def is_ready() -> bool:
@@ -63,7 +67,10 @@ def predict(
     is_flaky_test: int = 0,
 ) -> dict:
     if not _ready:
-        raise RuntimeError("Models not loaded. Please train the model first.")
+        # Try one last-ditch load if not ready
+        load_models()
+        if not _ready:
+            raise RuntimeError("Models not loaded. Please train the model first.")
 
     # TF-IDF features
     X_msg   = _vec_msg.transform([error_message])

@@ -17,7 +17,10 @@ from app.models.failure import Failure
 from app.models.healing import HealingAction
 from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
-from app.services import gateway_client as gc
+from app.core import ml_classifier as ml
+from app.core import healing_engine as healer
+from app.core import flaky_detector as analytics
+from app.core import notifier
 
 router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
 
@@ -45,60 +48,60 @@ class AnalyzeRequest(BaseModel):
 async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     test_id = f"TEST-{uuid.uuid4().hex[:8].upper()}"
 
-    # ── Step 1: ML Classification ──────────────────────────────────────────────
+    # ── Step 1: ML Classification (Local) ──────────────────────────────────────
     try:
-        ml_result = await gc.classify({
-            "error_message":    req.error_message,
-            "stack_trace":      req.stack_trace or "",
-            "failure_stage":    req.failure_stage,
-            "failure_type":     req.failure_type,
-            "severity":         req.severity,
-            "retry_count":      req.retry_count,
-            "test_duration_sec": req.test_duration_sec,
-            "cpu_usage_pct":    req.cpu_usage_pct,
-            "memory_usage_mb":  req.memory_usage_mb,
-            "is_flaky_test":    req.is_flaky_test,
-        })
+        ml_result = ml.predict(
+            error_message     = req.error_message,
+            stack_trace       = req.stack_trace or "",
+            failure_stage     = req.failure_stage,
+            failure_type      = req.failure_type,
+            severity          = req.severity,
+            retry_count       = req.retry_count,
+            test_duration_sec = req.test_duration_sec,
+            cpu_usage_pct     = req.cpu_usage_pct,
+            memory_usage_mb   = req.memory_usage_mb,
+            is_flaky_test     = req.is_flaky_test,
+        )
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"ML Service unavailable: {e}")
+        raise HTTPException(status_code=500, detail=f"ML Analysis failed: {e}")
 
     root_cause = ml_result["root_cause"]
     confidence = ml_result["confidence"]
 
-    # ── Step 2: Self-Healing ───────────────────────────────────────────────────
+    # ── Step 2: Self-Healing (Local) ───────────────────────────────────────────
     try:
-        heal_result = await gc.heal({
-            "test_id":       test_id,
-            "test_name":     req.test_name,
-            "root_cause":    root_cause,
-            "confidence":    confidence,
-            "error_message": req.error_message,
-            "stack_trace":   req.stack_trace or "",
-            "failure_type":  req.failure_type,
-            "old_value":     req.old_locator or "",
-        })
+        heal_result = healer.heal(
+            test_id       = test_id,
+            test_name     = req.test_name,
+            root_cause    = root_cause,
+            confidence    = confidence,
+            error_message = req.error_message,
+            stack_trace   = req.stack_trace or "",
+            failure_type  = req.failure_type,
+            old_value     = req.old_locator or "",
+        )
     except Exception as e:
         heal_result = {
-            "healing_id":     f"H-UNAVAIL",
+            "healing_id":     "H-ERROR",
             "repair_type":    "N/A",
             "old_value":      "",
             "new_value":      "",
-            "recommendation": f"Healing service unavailable: {e}",
+            "recommendation": f"Healing engine error: {e}",
             "status":         "Pending",
             "developer_alert": False,
         }
 
-    # ── Step 3: Flaky Test Detection ───────────────────────────────────────────
+    # ── Step 3: Flaky Test Detection (Local) ───────────────────────────────────
     try:
-        flaky_result = await gc.check_flaky({
-            "test_id":          test_id,
-            "test_name":        req.test_name,
-            "retry_count":      req.retry_count,
-            "failure_type":     req.failure_type,
-            "failure_stage":    req.failure_stage,
-            "severity":         req.severity,
-            "test_duration_sec": req.test_duration_sec,
-        })
+        flaky_result = analytics.check_flaky(
+            test_id           = test_id,
+            test_name         = req.test_name,
+            retry_count       = req.retry_count,
+            failure_type      = req.failure_type,
+            failure_stage     = req.failure_stage,
+            severity          = req.severity,
+            test_duration_sec = req.test_duration_sec,
+        )
     except Exception as e:
         flaky_result = {
             "is_flaky":          False,
@@ -108,22 +111,22 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
             "recent_pattern":    "N/A",
         }
 
-    # ── Step 4: Notification (if developer alert needed) ───────────────────────
+    # ── Step 4: Notification (Local) ───────────────────────────────────────────
     notification_result = None
     developer_alert = heal_result.get("developer_alert", False)
     if developer_alert:
         try:
-            notification_result = await gc.notify({
-                "failure_test_id": test_id,
-                "test_name":       req.test_name,
-                "root_cause":      root_cause,
-                "message":         (
+            notification_result = notifier.create_notification(
+                failure_test_id = test_id,
+                test_name       = req.test_name,
+                root_cause      = root_cause,
+                message         = (
                     f"Test '{req.test_name}' failed with root cause '{root_cause}' "
                     f"(confidence: {confidence:.0%}). "
                     f"{heal_result.get('recommendation', '')}"
                 ),
-                "target":          "developer",
-            })
+                target          = "developer",
+            )
         except Exception as e:
             notification_result = {"status": "failed", "error": str(e)}
 
@@ -192,31 +195,36 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     }
 
 
-# ── Proxy endpoints ────────────────────────────────────────────────────────────
+# ── Local Metrics Endpoints ───────────────────────────────────────────────────
 @router.get("/health")
 async def check_services_health():
-    return await gc.services_health()
+    return {
+        "status": "healthy",
+        "components": {
+            "ml_classifier": "ready" if ml.is_ready() else "loading",
+            "healing_engine": "ready",
+            "analytics": "ready",
+            "notifier": "ready"
+        }
+    }
 
 
 @router.get("/metrics")
 async def get_ml_metrics():
-    try:
-        return await gc.get_ml_metrics()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"ML Service unavailable: {e}")
+    metrics = ml.get_metrics()
+    if not metrics:
+        raise HTTPException(status_code=404, detail="No ML metrics available.")
+    return metrics
 
 
 @router.post("/retrain")
 async def trigger_retrain():
-    try:
-        return await gc.trigger_retrain()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"ML Service unavailable: {e}")
+    # In a local monolithic setup, retraining can be triggered directly via scripts/train_model.py
+    # or we could implement a background task here. For now, we point to the research scripts.
+    return {"status": "info", "message": "Trigger retraining via research/scripts/master_train.py"}
 
 
 @router.get("/retrain/status")
 async def get_retrain_status():
-    try:
-        return await gc.get_retrain_status()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"ML Service unavailable: {e}")
+    return {"status": "idle", "message": "Manual retraining recommended in local mode."}
+

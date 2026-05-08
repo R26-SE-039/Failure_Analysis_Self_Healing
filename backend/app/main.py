@@ -13,9 +13,13 @@ from app.routers.analytics import router as analytics_router
 from app.routers.notifications import router as notifications_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.analyze import router as analyze_router
+from app.core import ml_classifier
 
 # ── Create all tables that don't exist yet ─────────────────────────────────────
 Base.metadata.create_all(bind=engine)
+
+
+
 
 # ── Safe migration: add created_at column if it doesn't exist ─────────────────
 def _run_migrations():
@@ -33,6 +37,10 @@ def _run_migrations():
 _run_migrations()
 
 app = FastAPI(title="Failure Analysis API")
+
+@app.on_event("startup")
+def startup_event():
+    ml_classifier.load_models()
 
 app.add_middleware(
     CORSMiddleware,
