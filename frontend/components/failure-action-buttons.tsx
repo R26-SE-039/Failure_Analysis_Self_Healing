@@ -53,7 +53,7 @@ export default function FailureActionButtons({ failure }: { failure: Failure }) 
           failure.healing !== "Rejected" && failure.healing
             ? healingStatus === "success" || failure.healing === "Applied"
               ? "bg-green-600"
-              : "bg-[var(--accent)] hover:opacity-90"
+              : "bg-blue-600 hover:bg-blue-700"
             : "cursor-not-allowed border border-[var(--border)] bg-[var(--card-2)] text-[var(--muted)] opacity-50"
         }`}
       >
