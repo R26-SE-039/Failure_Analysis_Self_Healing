@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Siren, Wrench, BarChart3, Bell, FlaskConical, BrainCircuit } from "lucide-react";
+import { LayoutDashboard, Siren, Wrench, BarChart3, Send, FlaskConical, BrainCircuit } from "lucide-react";
 
 const menuItems = [
   { name: "Dashboard",     href: "/",             icon: LayoutDashboard },
@@ -10,8 +10,7 @@ const menuItems = [
   { name: "Failures",      href: "/failures",      icon: Siren },
   { name: "Healing",       href: "/healing",       icon: Wrench },
   { name: "Analytics",     href: "/analytics",     icon: BarChart3 },
-  { name: "Notifications", href: "/notifications", icon: Bell },
-  { name: "Model Training",href: "/model",         icon: BrainCircuit },
+  { name: "Alert Outbox",  href: "/notifications", icon: Send },
 ];
 
 export default function Sidebar() {
