@@ -1,5 +1,5 @@
 "use client";
-
+import { useState, useEffect } from "react";
 import {
   PieChart,
   Pie,
@@ -22,12 +22,19 @@ const PLACEHOLDER: RiskEntry[] = [
 ];
 
 export default function FlakyRiskChart({ data }: Props) {
+  const [mounted, setMounted] = useState(false);
   const chartData = data && data.length > 0 ? data : PLACEHOLDER;
   const isEmpty   = chartData.every((d) => d.value === 0);
 
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   return (
     <div className="h-[280px] w-full">
-      {isEmpty ? (
+      {!mounted ? (
+        <div className="flex h-full items-center justify-center animate-pulse bg-slate-50/50 rounded-2xl border border-slate-100/50" />
+      ) : isEmpty ? (
         <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
           No flaky tests detected yet.
         </div>

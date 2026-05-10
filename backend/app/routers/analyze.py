@@ -198,14 +198,19 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 # ── Local Metrics Endpoints ───────────────────────────────────────────────────
 @router.get("/health")
 async def check_services_health():
+    # Frontend expects a flat Record<string, { status: string; model?: string; error?: string }>
+    # and UI displays it as name.replace("-service", "")
+    metrics = ml.get_metrics()
+    model_name = metrics.get("model_name", "N/A") if metrics else "N/A"
+    
     return {
-        "status": "healthy",
-        "components": {
-            "ml_classifier": "ready" if ml.is_ready() else "loading",
-            "healing_engine": "ready",
-            "analytics": "ready",
-            "notifier": "ready"
-        }
+        "ml-classifier-service": {
+            "status": "ready" if ml.is_ready() else "loading", 
+            "model": model_name
+        },
+        "healing-engine-service": {"status": "ready"},
+        "analytics-service": {"status": "ready"},
+        "notifier-service": {"status": "ready"}
     }
 
 
@@ -226,5 +231,7 @@ async def trigger_retrain():
 
 @router.get("/retrain/status")
 async def get_retrain_status():
-    return {"status": "idle", "message": "Manual retraining recommended in local mode."}
+    # Frontend expects { running: boolean, last_result: string }
+    # In local monolithic mode, we don't have a background worker yet.
+    return {"running": False, "last_result": "Manual retraining recommended in local mode."}
 
