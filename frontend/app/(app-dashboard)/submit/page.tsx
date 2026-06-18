@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Upload, PlusCircle, Layout, Code2, AlertTriangle, Cpu, Terminal, ArrowRight, Activity, ShieldCheck, Database, Award } from "lucide-react";
+import { Upload, PlusCircle, Layout, Code2, AlertTriangle, Activity, ShieldCheck, Award } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -42,6 +42,14 @@ const ROOT_CAUSE_COLORS: Record<string, string> = {
   environment_failure: "text-purple-600 bg-purple-50 border-purple-100",
   network_api_error:   "text-red-600 bg-red-50 border-red-100",
   application_defect:  "text-pink-600 bg-pink-50 border-pink-100",
+  dependency_issue: "text-orange-600 bg-orange-50 border-orange-100",
+  deployment_issue: "text-violet-600 bg-violet-50 border-violet-100",
+  infrastructure_resource_issue: "text-slate-600 bg-slate-50 border-slate-100",
+  network_issue: "text-red-600 bg-red-50 border-red-100",
+  other_or_unknown: "text-gray-600 bg-gray-50 border-gray-100",
+  security_policy_issue: "text-rose-600 bg-rose-50 border-rose-100",
+  test_script_issue: "text-blue-600 bg-blue-50 border-blue-100",
+  workflow_environment_issue: "text-cyan-700 bg-cyan-50 border-cyan-100",
 };
 
 export default function SubmitPage() {

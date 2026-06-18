@@ -17,12 +17,14 @@ from app.models.failure import Failure
 from app.models.healing import HealingAction
 from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
-from app.core import ml_classifier as ml
 from app.core import healing_engine as healer
 from app.core import flaky_detector as analytics
 from app.core import notifier
+from app.services.root_cause_service import root_cause_service
 
 router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
+
+ROOT_CAUSE_MODEL_NAME = "best_9class_root_cause_model.joblib"
 
 
 # ── Request schema for the analyze endpoint ────────────────────────────────────
@@ -43,6 +45,58 @@ class AnalyzeRequest(BaseModel):
     old_locator: Optional[str] = ""
 
 
+def _build_log_text(req: AnalyzeRequest) -> str:
+    """Create one log-like payload for the nine-class root-cause service."""
+
+    sections = [
+        f"pipeline={req.pipeline}",
+        f"stage={req.failure_stage}",
+        f"severity={req.severity}",
+        f"failure_type={req.failure_type}",
+        f"retry_count={req.retry_count}",
+        f"test_duration_sec={req.test_duration_sec}",
+        "",
+        "ERROR MESSAGE:",
+        req.error_message or "",
+        "",
+        "STACK TRACE:",
+        req.stack_trace or "",
+        "",
+        "FULL LOGS:",
+        req.logs or "",
+    ]
+
+    return "\n".join(sections)
+
+
+def _classification_from_root_cause(result: dict) -> dict:
+    probabilities = {
+        label: round(float(probability) / 100, 4)
+        for label, probability in result.get("probabilities", {}).items()
+    }
+
+    confidence_percentage = result.get(
+        "final_confidence_percentage",
+        result.get("ml_confidence_percentage", 0),
+    )
+
+    confidence = round(
+        float(confidence_percentage) / 100,
+        4,
+    )
+
+    return {
+        "root_cause": result["final_root_cause"],
+        "confidence": confidence,
+        "all_probabilities": probabilities,
+        "model_used": ROOT_CAUSE_MODEL_NAME,
+        "ml_prediction": result.get("ml_prediction"),
+        "decision_source": result.get("decision_source"),
+        "action": result.get("action"),
+        "detected_error": result.get("detected_error"),
+    }
+
+
 # ── Full pipeline endpoint ─────────────────────────────────────────────────────
 @router.post("/")
 async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
@@ -50,18 +104,10 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
     # ── Step 1: ML Classification (Local) ──────────────────────────────────────
     try:
-        ml_result = ml.predict(
-            error_message     = req.error_message,
-            stack_trace       = req.stack_trace or "",
-            failure_stage     = req.failure_stage,
-            failure_type      = req.failure_type,
-            severity          = req.severity,
-            retry_count       = req.retry_count,
-            test_duration_sec = req.test_duration_sec,
-            cpu_usage_pct     = req.cpu_usage_pct,
-            memory_usage_mb   = req.memory_usage_mb,
-            is_flaky_test     = req.is_flaky_test,
+        root_cause_result = root_cause_service.analyze(
+            _build_log_text(req)
         )
+        ml_result = _classification_from_root_cause(root_cause_result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ML Analysis failed: {e}")
 
@@ -200,13 +246,10 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 async def check_services_health():
     # Frontend expects a flat Record<string, { status: string; model?: string; error?: string }>
     # and UI displays it as name.replace("-service", "")
-    metrics = ml.get_metrics()
-    model_name = metrics.get("model_name", "N/A") if metrics else "N/A"
-    
     return {
         "ml-classifier-service": {
-            "status": "ready" if ml.is_ready() else "loading", 
-            "model": model_name
+            "status": "ready",
+            "model": ROOT_CAUSE_MODEL_NAME,
         },
         "healing-engine-service": {"status": "ready"},
         "analytics-service": {"status": "ready"},
@@ -216,10 +259,13 @@ async def check_services_health():
 
 @router.get("/metrics")
 async def get_ml_metrics():
-    metrics = ml.get_metrics()
-    if not metrics:
-        raise HTTPException(status_code=404, detail="No ML metrics available.")
-    return metrics
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            "No metrics artifact is available for "
+            f"{ROOT_CAUSE_MODEL_NAME}."
+        ),
+    )
 
 
 @router.post("/retrain")
