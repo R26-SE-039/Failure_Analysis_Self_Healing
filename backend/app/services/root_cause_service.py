@@ -175,6 +175,19 @@ class RootCauseService:
             str(line_number),
         )
 
+    @staticmethod
+    def find_run_context(log: str) -> str | None:
+        context_match = re.search(
+            r"attempt=\d+;\s*elapsed_ms=\d+;\s*worker_slot=\d+",
+            log,
+            flags=re.IGNORECASE,
+        )
+
+        if not context_match:
+            return None
+
+        return context_match.group(0)
+
     def extract_error_details(
         self,
         raw_log: str,
@@ -377,6 +390,7 @@ class RootCauseService:
             "missing_fixture": missing_fixture,
             "missing_module": missing_module,
             "log_excerpt": log_excerpt,
+            "run_context": self.find_run_context(clean_log),
         }
 
     @staticmethod
@@ -385,21 +399,22 @@ class RootCauseService:
     ) -> str:
         """Build the same input structure used for training."""
 
-        return " | ".join(
-            [
-                f"stage={details['stage']}",
-                f"language={details['language']}",
-                f"error_type={details['error_type']}",
-                f"error_message={details['error_message']}",
-                f"stack_trace={details['stack_trace']}",
-                f"failed_file={details['failed_file']}",
-                f"log={details['log_excerpt']}",
-                (
-                    "context=attempt=1; "
-                    "elapsed_ms=0; worker_slot=1"
-                ),
-            ]
-        )
+        parts = [
+            f"stage={details['stage']}",
+            f"language={details['language']}",
+            f"error_type={details['error_type']}",
+            f"error_message={details['error_message']}",
+            f"stack_trace={details['stack_trace']}",
+            f"failed_file={details['failed_file']}",
+            f"log={details['log_excerpt']}",
+        ]
+
+        if details.get("run_context"):
+            parts.append(
+                f"context={details['run_context']}"
+            )
+
+        return " | ".join(parts)
 
     @staticmethod
     def choose_action(
@@ -439,72 +454,6 @@ class RootCauseService:
             "manual_review",
         )
 
-    def apply_clear_rules(
-        self,
-        details: dict[str, Any],
-        ml_prediction: str,
-    ) -> tuple[str, str]:
-        """Validate only highly deterministic failures."""
-
-        if ml_prediction != "other_or_unknown":
-            return (
-                ml_prediction,
-                "machine_learning",
-            )
-
-        error_type = details["error_type"].lower()
-        failed_file = details["failed_file"].lower()
-        missing_module = (
-            details["missing_module"] or ""
-        ).lower()
-
-        if (
-            error_type == "fixtureerror"
-            and failed_file.startswith(
-                ("test/", "tests/")
-            )
-        ):
-            return (
-                "test_script_issue",
-                "deterministic_rule",
-            )
-
-        if (
-            error_type == "syntaxerror"
-            and failed_file.startswith(
-                ("app/", "src/")
-            )
-        ):
-            return (
-                "application_defect",
-                "deterministic_rule",
-            )
-
-        if (
-            error_type == "syntaxerror"
-            and failed_file.startswith(
-                ("test/", "tests/")
-            )
-        ):
-            return (
-                "test_script_issue",
-                "deterministic_rule",
-            )
-
-        if (
-            error_type == "modulenotfounderror"
-            and missing_module in {"app", "src"}
-        ):
-            return (
-                "workflow_environment_issue",
-                "deterministic_rule",
-            )
-
-        return (
-            ml_prediction,
-            "machine_learning",
-        )
-
     def analyze(
         self,
         raw_log: str,
@@ -538,12 +487,8 @@ class RootCauseService:
             probabilities[best_index]
         )
 
-        final_root_cause, decision_source = (
-            self.apply_clear_rules(
-                details,
-                ml_prediction,
-            )
-        )
+        final_root_cause = ml_prediction
+        decision_source = "machine_learning"
 
         probability_map = {
             str(label): round(
