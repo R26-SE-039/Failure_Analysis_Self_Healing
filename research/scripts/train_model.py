@@ -52,7 +52,7 @@ ROOT_MODELS = os.path.join(os.path.dirname(BASE_DIR), "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(ROOT_MODELS, exist_ok=True)
 
-DATASET = os.path.join(DATA_DIR, "final_training_dataset.csv")
+DATASET = os.path.join(DATA_DIR, "root_cause_training_dataset.csv")
 
 print("=" * 60)
 print("  NEXTGEN QA — ML Root Cause Classifier Training")
@@ -64,28 +64,12 @@ df = pd.read_csv(DATASET, low_memory=False)
 print(f"  Loaded {len(df):,} records, {df.shape[1]} columns")
 
 # Drop rows with missing target
-df = df.dropna(subset=["root_cause"])
-df["root_cause"] = df["root_cause"].str.strip().str.lower()
+df = df.dropna(subset=["root_cause_label"])
+df["root_cause"] = df["root_cause_label"].str.strip().str.lower()
 
-# Filter to valid classes only
-VALID_CLASSES = [
-    "locator_issue", "synchronization_issue", "test_data_issue",
-    "environment_failure", "network_api_error", "application_defect"
-]
-df = df[df["root_cause"].isin(VALID_CLASSES)].reset_index(drop=True)
-print(f"  After filtering: {len(df):,} records")
-
-# ── DOWN-SAMPLING FOR PROTOTYPE SPEED ─────────────────────────────────────────
-# Limit to max 2000 samples per class to speed up training drastically
-print("\n  Down-sampling large classes for prototype speed...")
-dfs = []
-for label in VALID_CLASSES:
-    subset = df[df["root_cause"] == label]
-    if len(subset) > 2000:
-        subset = subset.sample(n=2000, random_state=42)
-    dfs.append(subset)
-df = pd.concat(dfs).sample(frac=1, random_state=42).reset_index(drop=True)
-print(f"  After down-sampling: {len(df):,} records")
+# Get valid classes dynamically
+VALID_CLASSES = df["root_cause"].unique().tolist()
+print(f"  Classes found in dataset: {VALID_CLASSES}")
 
 print("\n  Root cause distribution:")
 dist = df["root_cause"].value_counts()
@@ -96,9 +80,22 @@ for label, cnt in dist.items():
 # ── 2. Feature Engineering ─────────────────────────────────────────────────────
 print("\n[2/7] Engineering features...")
 
-# Fill nulls
+# Fill nulls and handle missing columns dynamically
+if "severity" not in df.columns:
+    df["severity"] = "MEDIUM"
+if "retry_count" not in df.columns:
+    df["retry_count"] = 0
+if "test_duration_sec" not in df.columns:
+    df["test_duration_sec"] = 30
+if "cpu_usage_pct" not in df.columns:
+    df["cpu_usage_pct"] = 50
+if "memory_usage_mb" not in df.columns:
+    df["memory_usage_mb"] = 1024
+if "is_flaky_test" not in df.columns:
+    df["is_flaky_test"] = False
+
 df["error_message"]    = df["error_message"].fillna("").astype(str)
-df["stack_trace"]      = df["stack_trace"].fillna("").astype(str)
+df["stack_trace"]      = df["stack_trace_summary"].fillna("").astype(str) if "stack_trace_summary" in df.columns else (df["stack_trace"].fillna("").astype(str) if "stack_trace" in df.columns else "")
 df["failure_stage"]    = df["failure_stage"].fillna("unknown").astype(str)
 df["severity"]         = df["severity"].fillna("MEDIUM").astype(str)
 df["failure_type"]     = df["failure_type"].fillna("unknown").astype(str)
@@ -107,7 +104,7 @@ df["test_duration_sec"]= pd.to_numeric(df["test_duration_sec"], errors="coerce")
 df["cpu_usage_pct"]    = pd.to_numeric(df["cpu_usage_pct"], errors="coerce").fillna(50)
 df["memory_usage_mb"]  = pd.to_numeric(df["memory_usage_mb"], errors="coerce").fillna(1024)
 df["is_flaky_test"]    = df["is_flaky_test"].map(
-    {True: 1, False: 0, "True": 1, "False": 0}
+    {True: 1, False: 0, "True": 1, "False": 0, "TRUE": 1, "FALSE": 0}
 ).fillna(0).astype(int)
 
 # TF-IDF on error_message
