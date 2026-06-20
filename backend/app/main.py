@@ -9,6 +9,7 @@ from app.models.failure import Failure
 from app.models.healing import HealingAction
 from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
+from app.models.repair_attempt import RepairAttempt
 
 # Existing routers
 from app.routers.failures import router as failures_router
@@ -17,6 +18,7 @@ from app.routers.analytics import router as analytics_router
 from app.routers.notifications import router as notifications_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.analyze import router as analyze_router
+from app.routers.repairs import router as repairs_router
 
 # New nine-class root-cause router
 from app.routers.root_cause import router as root_cause_router
@@ -100,6 +102,7 @@ app.include_router(analytics_router)
 app.include_router(notifications_router)
 app.include_router(dashboard_router)
 app.include_router(analyze_router)
+app.include_router(repairs_router)
 
 
 # ── New nine-class root-cause analysis router ─────────────────────────────────

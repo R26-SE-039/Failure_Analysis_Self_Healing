@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -138,12 +139,69 @@ class RootCauseService:
         return "unknown"
 
     @staticmethod
-    def find_failed_file(log: str) -> tuple[str, str]:
+    def find_failed_file(
+        log: str,
+        error_type: str,
+    ) -> tuple[str, str]:
+        """
+        Find the file that actually caused the failure.
+
+        Pytest summaries often name the test module last, but SyntaxError
+        tracebacks point at the source file that Python could not parse.
+        """
+
+        normalized_log = log.replace("\\", "/")
+        normalized_error = error_type.lower()
+
+        if normalized_error == "syntaxerror":
+            syntax_matches = re.findall(
+                r'(?:E\s+)?File\s+"[^"]*?'
+                r'((?:app|src|tests?)/[^"]+)",\s+line\s+(\d+)',
+                normalized_log,
+                flags=re.IGNORECASE,
+            )
+
+            if syntax_matches:
+                source_matches = [
+                    match
+                    for match in syntax_matches
+                    if match[0].lower().startswith(("app/", "src/"))
+                ]
+
+                selected = (
+                    source_matches[-1]
+                    if source_matches
+                    else syntax_matches[-1]
+                )
+
+                return (
+                    selected[0],
+                    str(selected[1]),
+                )
+
+        if normalized_error == "fixtureerror":
+            fixture_match = re.search(
+                r"file\s+.*?"
+                r"((?:test|tests)/[^,\s]+),"
+                r"\s+line\s+(\d+)",
+                normalized_log,
+                flags=re.IGNORECASE,
+            )
+
+            if fixture_match:
+                return (
+                    fixture_match.group(1),
+                    fixture_match.group(2),
+                )
+
         patterns = [
             # File ".../app/user_service.py", line 10
             r'File\s+"[^"]*?'
-            r"((?:app|src|tests?)/[^\"']+)"
-            r'",\s+line\s+(\d+)',
+            r'((?:app|src|tests?)/[^"]+)",'
+            r"\s+line\s+(\d+)",
+
+            # .github/workflows/test.yml
+            r"(\.github/workflows/[^\s:]+)()",
 
             # file .../tests/test_user_service.py, line 6
             r"file\s+.*?"
@@ -160,7 +218,7 @@ class RootCauseService:
             matches.extend(
                 re.findall(
                     pattern,
-                    log,
+                    normalized_log,
                     flags=re.IGNORECASE,
                 )
             )
@@ -169,6 +227,7 @@ class RootCauseService:
             return "unknown", "unknown"
 
         file_name, line_number = matches[-1]
+        line_number = line_number or "unknown"
 
         return (
             file_name.replace("\\", "/"),
@@ -193,11 +252,6 @@ class RootCauseService:
         raw_log: str,
     ) -> dict[str, Any]:
         clean_log = self.remove_ansi(raw_log)
-        lower_log = clean_log.lower()
-
-        failed_file, failed_line = self.find_failed_file(
-            clean_log
-        )
 
         missing_fixture_match = re.search(
             r"fixture ['\"]([^'\"]+)['\"] not found",
@@ -229,12 +283,6 @@ class RootCauseService:
             error_message = (
                 f"No module named '{missing_module}'"
             )
-
-            # Local package exists in the repository but cannot
-            # be imported by GitHub Actions.
-            if missing_module.lower() in {"app", "src"}:
-                failed_file = ".github/workflows/test.yml"
-                failed_line = "unknown"
 
         else:
             error_patterns = [
@@ -286,6 +334,41 @@ class RootCauseService:
                     r"working directory.*not found",
                 ),
                 (
+                    "ConfigurationValueError",
+                    r"ConfigurationValueError:\s*(.+)|"
+                    r"\b[A-Z_]+ contains invalid value|"
+                    r"\b[A-Z_]+ must be an integer|"
+                    r"points to an invalid endpoint",
+                ),
+                (
+                    "MissingEnvironmentVariable",
+                    r"MissingEnvironmentVariable:\s*(.+)|"
+                    r"\b[A-Z_]+ is not defined",
+                ),
+                (
+                    "ConfigurationParseError",
+                    r"ConfigurationParseError:\s*(.+)|"
+                    r"invalid YAML syntax|"
+                    r"configuration file is not valid UTF-8|"
+                    r"configuration does not match required schema",
+                ),
+                (
+                    "SecretConfigurationError",
+                    r"SecretConfigurationError:\s*(.+)|"
+                    r"required secret .* is empty",
+                ),
+                (
+                    "ShellNotFoundError",
+                    r"ShellNotFoundError:\s*(.+)|"
+                    r"pwsh executable not found",
+                ),
+                (
+                    "WorkingDirectoryError",
+                    r"WorkingDirectoryError:\s*(.+)|"
+                    r"specified working directory does not exist|"
+                    r"runner cannot access workspace directory",
+                ),
+                (
                     "AssertionError",
                     r"AssertionError:\s*(.+)",
                 ),
@@ -328,6 +411,20 @@ class RootCauseService:
                         error_message = candidate_type
 
                     break
+
+        failed_file, failed_line = self.find_failed_file(
+            clean_log,
+            error_type,
+        )
+
+        # Local package exists in the repository but cannot be imported
+        # by GitHub Actions, so the workflow environment is the target.
+        if (
+            missing_module
+            and missing_module.lower() in {"app", "src"}
+        ):
+            failed_file = ".github/workflows/test.yml"
+            failed_line = "unknown"
 
         important_patterns = [
             r"##\[error\]",
@@ -416,44 +513,6 @@ class RootCauseService:
 
         return " | ".join(parts)
 
-    @staticmethod
-    def choose_action(
-        root_cause: str,
-    ) -> str:
-        actions = {
-            "application_defect":
-                "start_mcp_code_repair",
-
-            "test_script_issue":
-                "send_to_test_script_component",
-
-            "network_issue":
-                "recommend_retry",
-
-            "dependency_issue":
-                "dependency_patch_or_manual_review",
-
-            "workflow_environment_issue":
-                "review_workflow_configuration",
-
-            "infrastructure_resource_issue":
-                "retry_or_resource_review",
-
-            "deployment_issue":
-                "rollback_or_deployment_review",
-
-            "security_policy_issue":
-                "block_and_security_review",
-
-            "other_or_unknown":
-                "manual_review",
-        }
-
-        return actions.get(
-            root_cause,
-            "manual_review",
-        )
-
     def analyze(
         self,
         raw_log: str,
@@ -506,6 +565,10 @@ class RootCauseService:
             round(ml_confidence * 100, 2),
         )
 
+        model_input_sha256 = hashlib.sha256(
+            model_input.encode("utf-8")
+        ).hexdigest()
+
         return {
             "detected_error": {
                 "error_type":
@@ -545,10 +608,11 @@ class RootCauseService:
             "decision_source":
                 decision_source,
 
-            "action":
-                self.choose_action(
-                    final_root_cause
-                ),
+            "decision_reason":
+                "Selected by the trained nine-class model.",
+
+            "model_input_sha256":
+                model_input_sha256,
         }
 
 

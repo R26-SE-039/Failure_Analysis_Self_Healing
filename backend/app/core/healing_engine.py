@@ -99,10 +99,16 @@ _RECOMMENDATIONS = {
         "The classifier could not isolate a precise repair path. Review the "
         "captured log excerpt and route the failure manually."
     ),
+    "manual_review": (
+        "Manual Review",
+        "ML confidence is below the automation threshold and no deterministic "
+        "rule confirmed a repair path. Route this failure for manual review."
+    ),
     "application_defect": (
-        "Developer Alert",
-        "This failure indicates an application-level defect. No automated repair "
-        "is possible. A bug report has been raised for the development team."
+        "Controlled Read-Only Repair Plan",
+        "This failure indicates an application-level defect. Controlled MCP "
+        "investigation is available after explicit confirmation. Phase 1 "
+        "proposes a bounded repair plan without changing GitHub."
     ),
 }
 
@@ -230,7 +236,21 @@ def heal(
         status = "Pending"
         developer_alert = True
 
-    else:  # application_defect or unknown label
+    elif rc == "manual_review":
+        broken = old_value or "low-confidence failure signal"
+        new_val = "manual triage required"
+        repair_type, recommendation = _RECOMMENDATIONS["manual_review"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "application_defect":
+        broken = old_value or "application source defect"
+        new_val = "generate a read-only bounded repair proposal"
+        repair_type, recommendation = _RECOMMENDATIONS["application_defect"]
+        status = "Suggested"
+        developer_alert = True
+
+    else:
         broken = old_value or "N/A"
         new_val = "N/A - requires developer fix"
         repair_type, recommendation = _RECOMMENDATIONS.get(

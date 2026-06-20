@@ -17,10 +17,27 @@ from app.models.failure import Failure
 from app.models.healing import HealingAction
 from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
+from app.models.repair_attempt import RepairAttempt
 from app.core import healing_engine as healer
 from app.core import flaky_detector as analytics
 from app.core import notifier
+from app.services.github_actions_service import (
+    GitHubActionsApiError,
+    GitHubRunUrlError,
+    github_actions_service,
+)
+from app.services.healing_orchestrator import healing_orchestrator
+from app.services.repair_evidence_service import (
+    repair_evidence_service,
+)
+from app.services.repair_eligibility_service import (
+    RepairEligibilityService,
+)
 from app.services.root_cause_service import root_cause_service
+from app.services.secret_redaction import (
+    bounded_sanitized_text,
+    redact_secrets,
+)
 
 router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
 
@@ -43,6 +60,7 @@ class AnalyzeRequest(BaseModel):
     memory_usage_mb: Optional[float] = 1024
     is_flaky_test: Optional[int] = 0
     old_locator: Optional[str] = ""
+    github_actions_run_url: Optional[str] = None
 
 
 def _build_log_text(req: AnalyzeRequest) -> str:
@@ -84,16 +102,34 @@ def _classification_from_root_cause(result: dict) -> dict:
         float(confidence_percentage) / 100,
         4,
     )
+    ml_confidence = round(
+        float(result.get("ml_confidence_percentage", 0)) / 100,
+        4,
+    )
+
+    detected_error = result.get("detected_error")
+    if isinstance(detected_error, dict):
+        detected_error = {
+            key: (
+                redact_secrets(value)
+                if isinstance(value, str)
+                else value
+            )
+            for key, value in detected_error.items()
+        }
 
     return {
         "root_cause": result["final_root_cause"],
         "confidence": confidence,
+        "ml_prediction": result.get("ml_prediction"),
+        "ml_confidence": ml_confidence,
+        "final_confidence": confidence,
         "all_probabilities": probabilities,
         "model_used": ROOT_CAUSE_MODEL_NAME,
-        "ml_prediction": result.get("ml_prediction"),
         "decision_source": result.get("decision_source"),
-        "action": result.get("action"),
-        "detected_error": result.get("detected_error"),
+        "decision_reason": result.get("decision_reason"),
+        "detected_error": detected_error,
+        "model_input_sha256": result.get("model_input_sha256"),
     }
 
 
@@ -102,14 +138,31 @@ def _classification_from_root_cause(result: dict) -> dict:
 async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     test_id = f"TEST-{uuid.uuid4().hex[:8].upper()}"
 
+    source_run = None
+    if req.github_actions_run_url:
+        try:
+            source_run = await github_actions_service.resolve_run(
+                req.github_actions_run_url
+            )
+        except GitHubRunUrlError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except GitHubActionsApiError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
     # ── Step 1: ML Classification (Local) ──────────────────────────────────────
     try:
         root_cause_result = root_cause_service.analyze(
             _build_log_text(req)
         )
         ml_result = _classification_from_root_cause(root_cause_result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ML Analysis failed: {e}")
+        healing_plan = healing_orchestrator.create_plan(
+            root_cause_result
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="ML analysis failed.",
+        ) from error
 
     root_cause = ml_result["root_cause"]
     confidence = ml_result["confidence"]
@@ -121,21 +174,123 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
             test_name     = req.test_name,
             root_cause    = root_cause,
             confidence    = confidence,
-            error_message = req.error_message,
-            stack_trace   = req.stack_trace or "",
+            error_message = redact_secrets(
+                req.error_message or ""
+            ),
+            stack_trace   = redact_secrets(
+                req.stack_trace or ""
+            ),
             failure_type  = req.failure_type,
             old_value     = req.old_locator or "",
         )
-    except Exception as e:
+        heal_result.update(
+            {
+                "selected_action": healing_plan["action"],
+                "automatic_execution_allowed":
+                    healing_plan["automatic_execution_allowed"],
+                "requires_validation":
+                    healing_plan["requires_validation"],
+                "confidence_gate_applied":
+                    healing_plan["confidence_gate_applied"],
+            }
+        )
+    except Exception:
         heal_result = {
             "healing_id":     "H-ERROR",
             "repair_type":    "N/A",
             "old_value":      "",
             "new_value":      "",
-            "recommendation": f"Healing engine error: {e}",
+            "recommendation": "Healing engine processing failed.",
             "status":         "Pending",
             "developer_alert": False,
+            "selected_action": healing_plan["action"],
+            "automatic_execution_allowed":
+                healing_plan["automatic_execution_allowed"],
+            "requires_validation":
+                healing_plan["requires_validation"],
+            "confidence_gate_applied":
+                healing_plan["confidence_gate_applied"],
         }
+
+    raw_log = req.logs or req.error_message or ""
+    evidence = repair_evidence_service.extract(
+        raw_log,
+        root_cause_result.get("detected_error", {}),
+    )
+    eligibility = RepairEligibilityService().evaluate(
+        classification=ml_result,
+        healing_plan=healing_plan,
+        source_run=source_run,
+        candidate_file=evidence.candidate_file,
+        candidate_line=evidence.candidate_line,
+    )
+
+    repair_attempt = None
+    if root_cause == "application_defect":
+        attempt_id = (
+            f"REPAIR-{uuid.uuid4().hex[:12].upper()}"
+        )
+        repair_attempt = RepairAttempt(
+            attempt_id=attempt_id,
+            failure_test_id=test_id,
+            status=(
+                "eligible"
+                if eligibility.eligible
+                else "ineligible"
+            ),
+            mode="read_only",
+            eligible=eligibility.eligible,
+            eligibility_code=eligibility.code,
+            eligibility_reason=eligibility.reason,
+            predicted_root_cause=root_cause,
+            confidence=confidence,
+            decision_source=(
+                ml_result.get("decision_source")
+                or "machine_learning"
+            ),
+            selected_action=healing_plan["action"],
+            repository_owner=(
+                source_run.get("owner")
+                if source_run
+                else None
+            ),
+            repository_name=(
+                source_run.get("repository")
+                if source_run
+                else None
+            ),
+            run_id=(
+                source_run.get("run_id")
+                if source_run
+                else None
+            ),
+            head_sha=(
+                source_run.get("head_sha")
+                if source_run
+                else None
+            ),
+            head_branch=(
+                source_run.get("head_branch")
+                if source_run
+                else None
+            ),
+            default_branch=(
+                source_run.get("default_branch")
+                if source_run
+                else None
+            ),
+            error_type=evidence.error_type,
+            error_message=evidence.error_message,
+            candidate_file=evidence.candidate_file,
+            candidate_line=evidence.candidate_line,
+            log_content_sha256=(
+                evidence.log_content_sha256
+            ),
+            sanitized_log_excerpt=(
+                evidence.sanitized_log_excerpt
+            ),
+            github_changes_made=False,
+        )
 
     # ── Step 3: Flaky Test Detection (Local) ───────────────────────────────────
     try:
@@ -173,8 +328,11 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 ),
                 target          = "developer",
             )
-        except Exception as e:
-            notification_result = {"status": "failed", "error": str(e)}
+        except Exception:
+            notification_result = {
+                "status": "failed",
+                "error": "Notification processing failed.",
+            }
 
     # ── Step 5: Persist to DB ──────────────────────────────────────────────────
     failure_record = Failure(
@@ -185,8 +343,12 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         root_cause       = root_cause,
         confidence       = f"{confidence:.0%}",
         healing          = heal_result.get("status", "Pending"),
-        logs             = req.logs or req.error_message,
-        stack_trace      = req.stack_trace,
+        logs             = evidence.sanitized_log_excerpt,
+        stack_trace      = bounded_sanitized_text(
+            req.stack_trace or "",
+            max_lines=40,
+            max_chars=8000,
+        ),
         recommendation   = heal_result.get("recommendation"),
         developer_alert  = developer_alert,
     )
@@ -202,6 +364,9 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         status           = heal_result.get("status", "Pending"),
     )
     db.add(healing_record)
+
+    if repair_attempt:
+        db.add(repair_attempt)
 
     if flaky_result.get("is_flaky"):
         flaky_record = FlakyTest(
@@ -233,9 +398,27 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         "status":     "FAIL",
         "pipeline": {
             "classification": ml_result,
+            "source_run":       source_run,
+            "healing_plan":   healing_plan,
             "healing":        heal_result,
             "flaky_analysis": flaky_result,
             "notification":   notification_result,
+            "repair": (
+                {
+                    "attempt_id":
+                        repair_attempt.attempt_id,
+                    "eligible":
+                        repair_attempt.eligible,
+                    "reason":
+                        repair_attempt.eligibility_reason,
+                    "status":
+                        repair_attempt.status,
+                    "mode": "read_only",
+                    "github_changes_made": False,
+                }
+                if repair_attempt
+                else None
+            ),
         },
         "saved_to_db": True,
     }

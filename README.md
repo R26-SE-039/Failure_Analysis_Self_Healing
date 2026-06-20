@@ -299,6 +299,7 @@ FastAPI gateway that orchestrates the full analysis pipeline and exposes CRUD en
 | `GET /healing` | GET | List all healing actions |
 | `GET /analytics` | GET | Flaky test list |
 | `GET /notifications` | GET | List all notifications |
+| `POST /api/github/actions/resolve` | POST | Resolve a GitHub Actions run URL into repository, SHA, and branch metadata |
 
 ---
 
@@ -361,7 +362,8 @@ python scripts/train_model.py
   "cpu_usage_pct": 72.5,
   "memory_usage_mb": 1280,
   "is_flaky_test": 0,
-  "old_locator": "#password-field"
+  "old_locator": "#password-field",
+  "github_actions_run_url": "https://github.com/owner/repository/actions/runs/123456"
 }
 ```
 
@@ -518,6 +520,11 @@ curl http://localhost:8000/analyze/retrain/status
 | `HEALING_SERVICE_URL` | Self-healing service URL | `http://healing-service:8002` |
 | `ANALYTICS_SERVICE_URL` | Analytics service URL | `http://analytics-service:8003` |
 | `NOTIFICATION_SERVICE_URL` | Notification service URL | `http://notification-service:8004` |
+| `GITHUB_PAT_TOKEN` | Fine-grained PAT used server-side to read workflow-run metadata | Optional for public repositories |
+
+For private repositories, grant the fine-grained token repository access plus
+`Actions: Read-only` and `Metadata: Read-only`. Keep the token in `backend/.env`
+or the backend process environment. Never send it from the frontend.
 
 ### Frontend (`frontend/.env.local`)
 
