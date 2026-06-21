@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlsplit
@@ -128,6 +129,7 @@ class McpSettings:
 class Settings:
     openrouter_api_key: str
     openrouter_model: str
+    openrouter_provider: str | None
     openrouter_base_url: str
     github_mcp_url: str
     github_mcp_token: str
@@ -139,6 +141,8 @@ class Settings:
     max_excerpt_lines: int
     max_excerpt_chars: int
     timeout_seconds: int
+    openrouter_request_timeout_seconds: int
+    planning_timeout_seconds: int
 
     @classmethod
     def from_environment(
@@ -156,6 +160,16 @@ class Settings:
         }:
             raise ConfigurationError(
                 "OPENROUTER_MODEL must name one fixed model."
+            )
+        openrouter_provider = (
+            env.get("OPENROUTER_PROVIDER", "").strip() or None
+        )
+        if openrouter_provider and not re.fullmatch(
+            r"[A-Za-z0-9._ -]{1,100}",
+            openrouter_provider,
+        ):
+            raise ConfigurationError(
+                "OPENROUTER_PROVIDER contains invalid characters."
             )
 
         openrouter_base_url = _required(
@@ -182,6 +196,7 @@ class Settings:
                 "OPENROUTER_API_KEY",
             ),
             openrouter_model=openrouter_model,
+            openrouter_provider=openrouter_provider,
             openrouter_base_url=openrouter_base_url.rstrip("/"),
             github_mcp_url=mcp.github_mcp_url,
             github_mcp_token=mcp.github_mcp_token,
@@ -196,4 +211,14 @@ class Settings:
             max_excerpt_lines=mcp.max_excerpt_lines,
             max_excerpt_chars=mcp.max_excerpt_chars,
             timeout_seconds=mcp.timeout_seconds,
+            openrouter_request_timeout_seconds=_positive_int(
+                env,
+                "OPENROUTER_TIMEOUT_SECONDS",
+                180,
+            ),
+            planning_timeout_seconds=_positive_int(
+                env,
+                "REPAIR_PLANNING_TIMEOUT_SECONDS",
+                240,
+            ),
         )

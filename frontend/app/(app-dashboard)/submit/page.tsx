@@ -93,6 +93,8 @@ type RepairPlan = {
   status: "planned" | "manual_review";
   mode: "read_only";
   model: string;
+  root_cause_confirmed: boolean;
+  repairable: boolean;
   confirmed_failed_file: string;
   confirmed_failed_line: number | null;
   base_sha: string;

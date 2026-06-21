@@ -11,6 +11,7 @@ def valid_environment() -> dict[str, str]:
     return {
         "OPENROUTER_API_KEY": "test-provider-key",
         "OPENROUTER_MODEL": "provider/tool-model",
+        "OPENROUTER_PROVIDER": "Structured Provider",
         "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
         "GITHUB_MCP_URL": "https://api.githubcopilot.com/mcp/",
         "GITHUB_MCP_TOKEN": "test-github-token",
@@ -55,8 +56,20 @@ class SettingsTests(unittest.TestCase):
             "provider/tool-model",
         )
         self.assertEqual(
+            settings.openrouter_provider,
+            "Structured Provider",
+        )
+        self.assertEqual(
             settings.allowed_repositories,
             frozenset({"example/project"}),
+        )
+        self.assertEqual(
+            settings.openrouter_request_timeout_seconds,
+            180,
+        )
+        self.assertEqual(
+            settings.planning_timeout_seconds,
+            240,
         )
 
     def test_rejects_missing_model(self):
@@ -69,6 +82,13 @@ class SettingsTests(unittest.TestCase):
     def test_rejects_random_model_router(self):
         environment = valid_environment()
         environment["OPENROUTER_MODEL"] = "openrouter/free"
+
+        with self.assertRaises(ConfigurationError):
+            Settings.from_environment(environment)
+
+    def test_rejects_invalid_provider_name(self):
+        environment = valid_environment()
+        environment["OPENROUTER_PROVIDER"] = "bad/provider"
 
         with self.assertRaises(ConfigurationError):
             Settings.from_environment(environment)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -14,7 +16,9 @@ from app.schemas.repair import (
     RepairPlanRequest,
 )
 from app.services.repair_agent_client import (
+    RepairAgentDownstreamError,
     RepairAgentError,
+    RepairAgentValidationError,
     repair_agent_client,
 )
 from app.services.repair_eligibility_service import (
@@ -27,6 +31,7 @@ router = APIRouter(
     prefix="/api/repairs",
     tags=["Controlled Repair"],
 )
+logger = logging.getLogger(__name__)
 
 
 def _validated_plan(
@@ -46,7 +51,12 @@ def _validated_plan(
     if plan.base_sha.lower() != (attempt.head_sha or "").lower():
         raise ValueError("Repair plan SHA mismatch.")
     if plan.confirmed_failed_file != attempt.candidate_file:
-        raise ValueError("Repair plan failed-file mismatch.")
+        if (
+            is_protected_path(plan.confirmed_failed_file)
+            or PurePosixPath(plan.confirmed_failed_file).name
+            != PurePosixPath(attempt.candidate_file).name
+        ):
+            raise ValueError("Repair plan failed-file mismatch.")
     if plan.confirmed_failed_line != attempt.candidate_line:
         raise ValueError("Repair plan failed-line mismatch.")
     if plan.github_changes_made is not False:
@@ -169,6 +179,46 @@ async def create_read_only_plan(
     try:
         result = await repair_agent_client.create_plan(request)
         result = _validated_plan(attempt, result)
+    except RepairAgentValidationError as error:
+        logger.warning(
+            "correlation_id=%s stage=plan_failed "
+            "error_code=plan_validation_failed",
+            error.correlation_id,
+        )
+        attempt.status = "failed"
+        attempt.failure_reason = json.dumps(
+            {
+                "kind": "request_validation",
+                "errors": error.diagnostics,
+            }
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Read-only repair planning could not be completed."
+            ),
+        )
+    except RepairAgentDownstreamError as error:
+        logger.warning(
+            "correlation_id=%s stage=plan_failed error_code=%s",
+            error.correlation_id,
+            error.code,
+        )
+        attempt.status = "failed"
+        attempt.failure_reason = json.dumps(
+            {
+                "kind": "planning_failure",
+                "error_code": error.code,
+            }
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Read-only repair planning could not be completed."
+            ),
+        )
     except (RepairAgentError, ValueError):
         attempt.status = "failed"
         attempt.failure_reason = (

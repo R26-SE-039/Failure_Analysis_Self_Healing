@@ -23,6 +23,10 @@ class RepairPlanRequest(BaseModel):
     error_message: str = Field(max_length=1000)
     candidate_file: str
     candidate_line: int = Field(ge=1)
+    related_test_files: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+    )
     sanitized_log_excerpt: str = Field(max_length=12000)
     read_only: Literal[True] = True
 
@@ -41,13 +45,16 @@ class ProviderProposedChange(BaseModel):
 class ProviderRepairPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["planned", "manual_review"]
+    root_cause_confirmed: bool
+    repairable: bool
     confirmed_failed_file: str
     confirmed_failed_line: int
+    inspected_files: list[str] = Field(max_length=4)
     proposed_changes: list[ProviderProposedChange]
     risks: list[str]
     suggested_validation_commands: list[str]
-    manual_review_reason: str | None = None
+    manual_review_reason: str | None
+    github_changes_made: Literal[False]
 
 
 class ReadOnlyRepairPlan(BaseModel):
@@ -57,6 +64,8 @@ class ReadOnlyRepairPlan(BaseModel):
     status: Literal["planned", "manual_review"]
     mode: Literal["read_only"] = "read_only"
     model: str
+    root_cause_confirmed: bool
+    repairable: bool
     confirmed_failed_file: str
     confirmed_failed_line: int
     base_sha: str
@@ -66,3 +75,19 @@ class ReadOnlyRepairPlan(BaseModel):
     suggested_validation_commands: list[str]
     manual_review_reason: str | None = None
     github_changes_made: Literal[False] = False
+
+
+class EvidenceExcerpt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    content: str
+
+
+class PlanEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate: EvidenceExcerpt
+    related_tests: list[EvidenceExcerpt] = Field(max_length=3)

@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
@@ -25,9 +26,12 @@ def attempt():
 
 def plan():
     return ReadOnlyRepairPlan(
+        correlation_id="safe-correlation-123",
         attempt_id="REPAIR-123",
         status="planned",
         model="mock/tool-model",
+        root_cause_confirmed=True,
+        repairable=True,
         confirmed_failed_file="app/user_service.py",
         confirmed_failed_line=10,
         base_sha="a" * 40,
@@ -46,6 +50,58 @@ def plan():
         suggested_validation_commands=["pytest -q"],
         github_changes_made=False,
     )
+
+
+def complete_attempt():
+    return SimpleNamespace(
+        attempt_id="REPAIR-123",
+        eligible=True,
+        eligibility_reason="Eligible.",
+        status="suggested",
+        repair_plan=None,
+        repository_owner="example",
+        repository_name="project",
+        run_id=123,
+        head_sha="a" * 40,
+        head_branch="feature/failure",
+        default_branch="main",
+        predicted_root_cause="application_defect",
+        confidence=0.81,
+        decision_source="machine_learning",
+        selected_action="start_mcp_code_repair",
+        error_type="SyntaxError",
+        error_message="A sanitized syntax error.",
+        candidate_file="app/user_service.py",
+        candidate_line=10,
+        sanitized_log_excerpt="Sanitized evidence.",
+        inspected_files=None,
+        provider_model=None,
+        github_changes_made=False,
+        failure_reason=None,
+    )
+
+
+class FakeQuery:
+    def __init__(self, value):
+        self.value = value
+
+    def filter(self, *_args):
+        return self
+
+    def first(self):
+        return self.value
+
+
+class FakeDatabase:
+    def __init__(self, value):
+        self.value = value
+        self.commits = 0
+
+    def query(self, _model):
+        return FakeQuery(self.value)
+
+    def commit(self):
+        self.commits += 1
 
 
 class RepairRouterSafetyTests(unittest.TestCase):
@@ -81,6 +137,28 @@ class RepairConfirmationTests(
             )
 
         self.assertEqual(raised.exception.status_code, 400)
+
+    async def test_successful_plan_is_stored_and_returned(self):
+        repair_attempt = complete_attempt()
+        database = FakeDatabase(repair_attempt)
+
+        with patch(
+            "app.routers.repairs.repair_agent_client.create_plan",
+            new=AsyncMock(return_value=plan()),
+        ):
+            result = await create_read_only_plan(
+                repair_attempt.attempt_id,
+                RepairConfirmationRequest(
+                    confirm_read_only=True,
+                ),
+                db=database,
+            )
+
+        self.assertEqual(result, plan().model_dump())
+        self.assertEqual(repair_attempt.repair_plan, result)
+        self.assertEqual(repair_attempt.status, "planned")
+        self.assertFalse(repair_attempt.github_changes_made)
+        self.assertEqual(database.commits, 2)
 
 
 if __name__ == "__main__":

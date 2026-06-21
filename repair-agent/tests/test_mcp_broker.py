@@ -20,6 +20,23 @@ class FakeMcpClient:
         return self.content
 
 
+class SearchMcpClient(FakeMcpClient):
+    async def list_tools(self):
+        return {
+            "get_file_contents",
+            "search_code",
+            "create_branch",
+        }
+
+    async def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
+        if name == "search_code":
+            return (
+                '{"items":[{"path":"src/user_service.py"}]}'
+            )
+        return self.content
+
+
 class GitHubReadBrokerTests(
     unittest.IsolatedAsyncioTestCase
 ):
@@ -110,6 +127,44 @@ class GitHubReadBrokerTests(
                 max_files=2,
                 max_bytes=1000,
             )
+
+    async def test_search_only_locates_then_exact_sha_read(self):
+        client = SearchMcpClient()
+        broker = GitHubReadBroker(
+            client=client,
+            owner="example",
+            repository="project",
+            head_sha="a" * 40,
+            allowed_repositories=frozenset(
+                {"example/project"}
+            ),
+            max_tool_calls=3,
+            max_files=1,
+            max_bytes=2000,
+        )
+
+        resolved = await broker.find_candidate_path(
+            "app/user_service.py"
+        )
+        await broker.read_file(resolved)
+
+        self.assertEqual(resolved, "src/user_service.py")
+        self.assertEqual(
+            client.calls[-1],
+            (
+                "get_file_contents",
+                {
+                    "owner": "example",
+                    "repo": "project",
+                    "path": "src/user_service.py",
+                    "ref": "a" * 40,
+                },
+            ),
+        )
+        self.assertNotIn(
+            "create_branch",
+            [name for name, _arguments in client.calls],
+        )
 
 
 if __name__ == "__main__":

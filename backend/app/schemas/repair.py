@@ -23,10 +23,17 @@ class ProposedChange(BaseModel):
 class ReadOnlyRepairPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    correlation_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9-]+$",
+    )
     attempt_id: str
     status: Literal["planned", "manual_review"]
     mode: Literal["read_only"] = "read_only"
     model: str
+    root_cause_confirmed: bool
+    repairable: bool
     confirmed_failed_file: str
     confirmed_failed_line: int
     base_sha: str
@@ -51,20 +58,26 @@ class RepairAttemptSummary(BaseModel):
 
 
 class RepairPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     attempt_id: str
     repository_owner: str
     repository_name: str
-    run_id: int
-    head_sha: str
+    run_id: int = Field(gt=0)
+    head_sha: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
     head_branch: str
-    default_branch: Optional[str]
+    default_branch: Optional[str] = None
     root_cause: str
-    confidence: float
+    confidence: float = Field(ge=0, le=1)
     decision_source: str
     selected_action: str
     error_type: str
-    error_message: str
+    error_message: str = Field(max_length=1000)
     candidate_file: str
-    candidate_line: int
-    sanitized_log_excerpt: str
+    candidate_line: int = Field(ge=1)
+    related_test_files: list[str] = Field(
+        default_factory=list,
+        max_length=3,
+    )
+    sanitized_log_excerpt: str = Field(max_length=12000)
     read_only: Literal[True] = True

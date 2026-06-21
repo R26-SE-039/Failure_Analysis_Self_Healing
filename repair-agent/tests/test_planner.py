@@ -16,6 +16,7 @@ def settings() -> Settings:
     return Settings(
         openrouter_api_key="test-provider-key",
         openrouter_model="provider/tool-model",
+        openrouter_provider=None,
         openrouter_base_url="https://openrouter.ai/api/v1",
         github_mcp_url="https://api.githubcopilot.com/mcp/",
         github_mcp_token="test-github-token",
@@ -29,6 +30,8 @@ def settings() -> Settings:
         max_excerpt_lines=4,
         max_excerpt_chars=500,
         timeout_seconds=30,
+        openrouter_request_timeout_seconds=180,
+        planning_timeout_seconds=240,
     )
 
 
@@ -54,13 +57,19 @@ def request() -> RepairPlanRequest:
 
 
 class FakeMcpClient:
+    def __init__(self):
+        self.calls = []
+
     async def list_tools(self):
         return {"get_file_contents"}
 
     async def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
         return (
-            "def create_user(name):\n"
+            "line 1\nline 2\nline 3\nline 4\nline 5\n"
+            "line 6\nline 7\nline 8\nline 9\n"
             "    return User(name=name\n"
+            "line 11\nline 12\n"
         )
 
 
@@ -69,22 +78,27 @@ class FakeProvider:
 
     def __init__(self, after_excerpt: str = "    return User(name=name)"):
         self.after_excerpt = after_excerpt
+        self.calls = 0
+        self.last_evidence = None
 
-    async def create_plan(self, repair_request, reader):
-        await reader.read_file(repair_request.candidate_file)
+    async def create_plan(self, repair_request, evidence):
+        self.calls += 1
+        self.last_evidence = evidence
         return ProviderRepairPlan(
-            status="planned",
+            root_cause_confirmed=True,
+            repairable=True,
             confirmed_failed_file=(
-                repair_request.candidate_file
+                evidence.candidate.file_path
             ),
             confirmed_failed_line=(
                 repair_request.candidate_line
             ),
+            inspected_files=[evidence.candidate.file_path],
             proposed_changes=[
                 ProviderProposedChange(
                     file_path="app/user_service.py",
-                    start_line=2,
-                    end_line=2,
+                    start_line=10,
+                    end_line=10,
                     before_excerpt=(
                         "    return User(name=name"
                     ),
@@ -94,6 +108,8 @@ class FakeProvider:
             ],
             risks=["Constructor behavior should be reviewed."],
             suggested_validation_commands=["pytest -q"],
+            manual_review_reason=None,
+            github_changes_made=False,
         )
 
 
@@ -101,10 +117,12 @@ class RepairPlannerTests(
     unittest.IsolatedAsyncioTestCase
 ):
     async def test_returns_bounded_read_only_plan(self):
+        mcp = FakeMcpClient()
+        provider = FakeProvider()
         planner = RepairPlanner(
             settings=settings(),
-            provider=FakeProvider(),
-            mcp_client_factory=FakeMcpClient,
+            provider=provider,
+            mcp_client_factory=lambda: mcp,
         )
 
         result = await planner.create_plan(request())
@@ -118,6 +136,27 @@ class RepairPlannerTests(
         self.assertEqual(
             result.suggested_validation_commands,
             ["pytest -q"],
+        )
+        self.assertTrue(result.root_cause_confirmed)
+        self.assertTrue(result.repairable)
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(
+            mcp.calls,
+            [
+                (
+                    "get_file_contents",
+                    {
+                        "owner": "example",
+                        "repo": "project",
+                        "path": "app/user_service.py",
+                        "ref": "a" * 40,
+                    },
+                )
+            ],
+        )
+        self.assertEqual(
+            provider.last_evidence.candidate.start_line,
+            8,
         )
 
     async def test_rejects_oversized_excerpt(self):

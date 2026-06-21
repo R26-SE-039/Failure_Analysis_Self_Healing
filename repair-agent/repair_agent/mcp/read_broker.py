@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import json
+from pathlib import PurePosixPath
 
 from repair_agent.mcp.interface import McpToolClient
 from repair_agent.security import (
@@ -11,6 +13,11 @@ from repair_agent.security import (
 
 
 READ_CONTENT_TOOL = "get_file_contents"
+SEARCH_CODE_TOOL = "search_code"
+READ_TOOL_ALLOWLIST = {
+    READ_CONTENT_TOOL,
+    SEARCH_CODE_TOOL,
+}
 
 
 class ReadLimitError(RuntimeError):
@@ -51,6 +58,7 @@ class GitHubReadBroker:
         self._inspected_files: list[str] = []
         self._read_contents: dict[str, str] = {}
         self._tools_verified = False
+        self._available_tools: set[str] = set()
 
     @property
     def inspected_files(self) -> list[str]:
@@ -68,6 +76,9 @@ class GitHubReadBroker:
             raise ReadLimitError(
                 "Required read-only GitHub MCP tool is unavailable."
             )
+        self._available_tools = (
+            set(available) & READ_TOOL_ALLOWLIST
+        )
         self._tools_verified = True
 
     async def _read(self, path: str) -> str:
@@ -110,3 +121,79 @@ class GitHubReadBroker:
 
     async def list_directory(self, path: str) -> str:
         return await self._read(path)
+
+    async def find_candidate_path(
+        self,
+        candidate_path: str,
+    ) -> str | None:
+        await self._verify_tools()
+        if SEARCH_CODE_TOOL not in self._available_tools:
+            return None
+        if self._tool_calls >= self.max_tool_calls:
+            raise ReadLimitError("MCP tool-call limit reached.")
+
+        normalized = normalize_repository_path(candidate_path)
+        filename = PurePosixPath(normalized).name
+        self._tool_calls += 1
+        result = await self.client.call_tool(
+            SEARCH_CODE_TOOL,
+            {
+                "query": (
+                    f"repo:{self.owner}/{self.repository} "
+                    f"filename:{filename}"
+                ),
+                "page": 1,
+                "perPage": 10,
+            },
+        )
+        encoded_size = len(result.encode("utf-8"))
+        if self._bytes + encoded_size > self.max_bytes:
+            raise ReadLimitError("MCP byte limit reached.")
+        reject_sensitive_content(result)
+        self._bytes += encoded_size
+
+        paths = self._paths_from_search(result)
+        matching = sorted(
+            {
+                path
+                for path in paths
+                if PurePosixPath(path).name == filename
+            }
+        )
+        return matching[0] if len(matching) == 1 else None
+
+    @staticmethod
+    def _paths_from_search(result: str) -> set[str]:
+        paths: set[str] = set()
+        try:
+            payload = json.loads(result)
+        except ValueError:
+            payload = None
+
+        def collect(value: object) -> None:
+            if isinstance(value, dict):
+                path = value.get("path")
+                if isinstance(path, str):
+                    try:
+                        paths.add(normalize_repository_path(path))
+                    except SecurityError:
+                        pass
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(payload)
+        if not paths:
+            for match in re.finditer(
+                r'"path"\s*:\s*"([^"]+)"',
+                result,
+            ):
+                try:
+                    paths.add(
+                        normalize_repository_path(match.group(1))
+                    )
+                except SecurityError:
+                    pass
+        return paths
