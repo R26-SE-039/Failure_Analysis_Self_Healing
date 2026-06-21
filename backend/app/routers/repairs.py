@@ -6,11 +6,14 @@ import os
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.repair_attempt import RepairAttempt
+from app.models.repair_publish_audit import RepairPublishAudit
 from app.schemas.repair import (
+    PublishConfirmationRequest,
     ReadOnlyRepairPlan,
     RepairConfirmationRequest,
     RepairPlanRequest,
@@ -19,7 +22,13 @@ from app.services.repair_agent_client import (
     RepairAgentDownstreamError,
     RepairAgentError,
     RepairAgentValidationError,
+    RepairPublishError,
     repair_agent_client,
+)
+from app.services.repair_publish_service import (
+    BRANCH_HEAD_MISMATCH_MESSAGE,
+    PublishSafetyError,
+    prepare_publish_request,
 )
 from app.services.repair_eligibility_service import (
     is_protected_path,
@@ -32,6 +41,22 @@ router = APIRouter(
     tags=["Controlled Repair"],
 )
 logger = logging.getLogger(__name__)
+
+PREWRITE_VALIDATION_ERROR_CODES = {
+    "plan_not_publishable",
+    "stored_plan_invalid",
+    "legacy_plan_schema",
+    "missing_proposed_changes",
+    "missing_before_excerpt",
+    "missing_after_excerpt",
+    "protected_or_invalid_path",
+    "changed_file_mismatch",
+    "changed_file_limit_exceeded",
+}
+PUBLISH_RECOVERY_ERROR_CODES = {
+    "draft_pr_identity_missing",
+    "publish_partial_manual_review_required",
+}
 
 
 def _validated_plan(
@@ -105,6 +130,11 @@ def get_repair_attempt(
             detail="Repair attempt not found.",
         )
 
+    publish_audit = (
+        db.query(RepairPublishAudit)
+        .filter(RepairPublishAudit.attempt_id == attempt_id)
+        .first()
+    )
     return {
         "attempt_id": attempt.attempt_id,
         "eligible": attempt.eligible,
@@ -112,7 +142,26 @@ def get_repair_attempt(
         "status": attempt.status,
         "mode": attempt.mode,
         "plan": attempt.repair_plan,
-        "github_changes_made": False,
+        "github_changes_made": bool(
+            attempt.github_changes_made
+            or (
+                publish_audit
+                and publish_audit.github_changes_made
+            )
+        ),
+        "publish": (
+            {
+                "publish_status": publish_audit.publish_status,
+                "validation_status": publish_audit.validation_status,
+                "repair_branch": publish_audit.repair_branch,
+                "commit_sha": publish_audit.commit_sha,
+                "draft_pr_number": publish_audit.draft_pr_number,
+                "draft_pr_url": publish_audit.draft_pr_url,
+                "error_code": publish_audit.error_code,
+            }
+            if publish_audit
+            else None
+        ),
     }
 
 
@@ -201,18 +250,34 @@ async def create_read_only_plan(
         )
     except RepairAgentDownstreamError as error:
         logger.warning(
-            "correlation_id=%s stage=plan_failed error_code=%s",
+            "correlation_id=%s stage=plan_failed error_code=%s "
+            "diagnostics=%s",
             error.correlation_id,
             error.code,
+            error.diagnostics,
         )
         attempt.status = "failed"
         attempt.failure_reason = json.dumps(
             {
                 "kind": "planning_failure",
                 "error_code": error.code,
+                "diagnostics": error.diagnostics,
             }
         )
         db.commit()
+        if error.code == "plan_validation_failed":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": (
+                        "The generated repair plan failed safety "
+                        "validation. Please retry or review manually."
+                    ),
+                    "error_code": error.code,
+                    "correlation_id": error.correlation_id,
+                    "diagnostics": error.diagnostics,
+                },
+            )
         raise HTTPException(
             status_code=502,
             detail=(
@@ -240,3 +305,198 @@ async def create_read_only_plan(
     db.commit()
 
     return result.model_dump()
+
+
+@router.post("/{attempt_id}/publish")
+async def publish_approved_repair(
+    attempt_id: str,
+    confirmation: PublishConfirmationRequest,
+    db: Session = Depends(get_db),
+):
+    if confirmation.confirm_publish is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit publish confirmation is required.",
+        )
+
+    attempt_query = db.query(RepairAttempt).filter(
+        RepairAttempt.attempt_id == attempt_id
+    )
+    if hasattr(attempt_query, "with_for_update"):
+        attempt_query = attempt_query.with_for_update()
+    attempt = attempt_query.first()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Repair attempt not found.")
+
+    existing = (
+        db.query(RepairPublishAudit)
+        .filter(RepairPublishAudit.attempt_id == attempt_id)
+        .first()
+    )
+    reusable_validation_audit = bool(
+        existing
+        and not existing.github_changes_made
+        and existing.error_code in PREWRITE_VALIDATION_ERROR_CODES
+    )
+    recovery_audit = bool(
+        existing
+        and (
+            existing.error_code in PUBLISH_RECOVERY_ERROR_CODES
+            or (
+                existing.error_code == "publish_mcp_failed"
+                and existing.publish_status == "commit_created"
+            )
+        )
+        and existing.github_changes_made
+        and existing.repair_branch
+        and existing.commit_sha
+        and not existing.draft_pr_number
+        and not existing.draft_pr_url
+    )
+    if (
+        (existing and not reusable_validation_audit and not recovery_audit)
+        or (attempt.github_changes_made and not recovery_audit)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This repair attempt has already entered publishing.",
+        )
+
+    repository = (
+        f"{attempt.repository_owner or ''}/"
+        f"{attempt.repository_name or ''}"
+    ).lower()
+    try:
+        publish_request, safety_checks = prepare_publish_request(
+            attempt,
+            allowed_repositories_value=os.getenv(
+                "GITHUB_ALLOWED_REPOSITORIES"
+            ),
+            max_files=int(os.getenv("REPAIR_MAX_FILES", "4")),
+            recovery_only=recovery_audit,
+        )
+    except PublishSafetyError as error:
+        audit = existing or RepairPublishAudit(
+            attempt_id=attempt.attempt_id,
+            repository=repository,
+            base_sha=attempt.head_sha or "unknown",
+            failed_branch=attempt.head_branch or "unknown",
+        )
+        audit.publish_status = "manual_review"
+        audit.validation_status = "failed"
+        audit.changed_files = []
+        audit.safety_check_results = {
+            "server_validation_passed": False,
+            **error.safe_diagnostics(),
+        }
+        audit.error_code = error.code
+        audit.github_changes_made = False
+        if existing is None:
+            db.add(audit)
+        db.commit()
+        return JSONResponse(
+            status_code=409,
+            content=error.safe_diagnostics(),
+        )
+
+    changed_files = sorted(
+        {change.file_path for change in publish_request.proposed_changes}
+    )
+    audit = existing or RepairPublishAudit(
+        attempt_id=attempt.attempt_id,
+        repository=repository,
+        base_sha=publish_request.base_sha,
+        failed_branch=publish_request.failed_branch,
+    )
+    audit.correlation_id = None
+    if not recovery_audit:
+        audit.repair_branch = None
+        audit.commit_sha = None
+        audit.draft_pr_number = None
+        audit.draft_pr_url = None
+    audit.publish_status = "in_progress"
+    audit.validation_status = "pending"
+    audit.changed_files = changed_files
+    audit.safety_check_results = safety_checks
+    audit.error_code = None
+    audit.github_changes_made = False
+    if existing is None:
+        db.add(audit)
+    db.commit()
+
+    try:
+        result = await repair_agent_client.publish_plan(publish_request)
+    except RepairPublishError as error:
+        state = error.state
+        audit.correlation_id = error.correlation_id
+        audit.repair_branch = state.get("repair_branch")
+        audit.commit_sha = state.get("commit_sha")
+        audit.draft_pr_number = state.get("draft_pr_number")
+        audit.draft_pr_url = state.get("draft_pr_url")
+        audit.publish_status = (
+            "manual_review"
+            if error.code == "branch_head_mismatch"
+            else state.get("publish_status", "failed")
+        )
+        audit.validation_status = state.get(
+            "validation_status",
+            "failed",
+        )
+        audit.error_code = error.code
+        audit.github_changes_made = bool(
+            state.get("github_changes_made", False)
+        )
+        if audit.github_changes_made:
+            attempt.github_changes_made = True
+        checks = dict(audit.safety_check_results or {})
+        for flag in ("branch_created", "commit_created", "pr_created"):
+            if flag in state and isinstance(state[flag], bool):
+                checks[flag] = state[flag]
+        if error.code == "branch_head_mismatch":
+            checks["branch_head_matches_failed_sha"] = False
+        audit.safety_check_results = checks
+        db.commit()
+        if error.code == "publish_partial_manual_review_required":
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": (
+                        "The repair branch and commit exist, but the draft "
+                        "pull request could not be recovered. Manual review "
+                        "is required."
+                    ),
+                    "error_code": error.code,
+                    "branch_created": bool(state.get("branch_created")),
+                    "commit_created": bool(state.get("commit_created")),
+                    "pr_created": bool(state.get("pr_created")),
+                },
+            )
+        detail = (
+            BRANCH_HEAD_MISMATCH_MESSAGE
+            if error.code == "branch_head_mismatch"
+            else "Controlled repair publishing could not be completed."
+        )
+        raise HTTPException(
+            status_code=(409 if error.code == "branch_head_mismatch" else 502),
+            detail=detail,
+        )
+
+    audit.correlation_id = result.correlation_id
+    audit.repair_branch = result.repair_branch
+    audit.commit_sha = result.commit_sha
+    audit.draft_pr_number = result.draft_pr_number
+    audit.draft_pr_url = result.draft_pr_url
+    audit.publish_status = result.publish_status
+    audit.validation_status = result.validation_status
+    audit.changed_files = result.changed_files
+    audit.github_changes_made = True
+    checks = dict(audit.safety_check_results or {})
+    checks["branch_head_matches_failed_sha"] = True
+    checks["draft_pull_request_verified"] = True
+    checks["automatic_merge_performed"] = False
+    audit.safety_check_results = checks
+
+    attempt.github_changes_made = True
+    attempt.status = "awaiting_review"
+    db.commit()
+    return result.model_dump(mode="json")

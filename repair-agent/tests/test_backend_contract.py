@@ -10,11 +10,16 @@ sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 from app.schemas.repair import (  # noqa: E402
     ReadOnlyRepairPlan as BackendReadOnlyRepairPlan,
     RepairPlanRequest as BackendRepairPlanRequest,
+    RepairPublishRequest as BackendRepairPublishRequest,
+    RepairPublishResult as BackendRepairPublishResult,
 )
 from repair_agent.schemas import (  # noqa: E402
     ReadOnlyRepairPlan as AgentReadOnlyRepairPlan,
     RepairPlanRequest as AgentRepairPlanRequest,
+    RepairPublishRequest as AgentRepairPublishRequest,
+    RepairPublishResult as AgentRepairPublishResult,
 )
+from tests.test_publisher import request as publish_request  # noqa: E402
 
 
 class BackendRepairAgentContractTests(unittest.TestCase):
@@ -85,6 +90,41 @@ class BackendRepairAgentContractTests(unittest.TestCase):
             wire_payload,
         )
         self.assertFalse(backend_plan.github_changes_made)
+
+    def test_publish_request_and_response_contracts_match(self):
+        agent_request = publish_request()
+        backend_request = BackendRepairPublishRequest.model_validate(
+            agent_request.model_dump(mode="json")
+        )
+        self.assertEqual(
+            set(BackendRepairPublishRequest.model_fields),
+            set(AgentRepairPublishRequest.model_fields),
+        )
+        self.assertEqual(
+            backend_request.model_dump(mode="json"),
+            agent_request.model_dump(mode="json"),
+        )
+
+        agent_result = AgentRepairPublishResult(
+            attempt_id=agent_request.attempt_id,
+            publish_status="draft_pr_created",
+            validation_status="pending",
+            repair_branch="auto-heal/repair-4cd693-syntaxerror",
+            commit_sha="b" * 40,
+            draft_pr_number=17,
+            draft_pr_url="https://github.com/example/project/pull/17",
+            changed_files=["app/user_service.py"],
+            github_changes_made=True,
+            automatic_merge_performed=False,
+            message="Draft PR created — awaiting developer review",
+            merge_message="No automatic merge performed",
+        )
+        envelope = {
+            **agent_result.model_dump(mode="json"),
+            "correlation_id": "publish-correlation-123",
+        }
+        backend_result = BackendRepairPublishResult.model_validate(envelope)
+        self.assertEqual(backend_result.model_dump(mode="json"), envelope)
 
 
 if __name__ == "__main__":

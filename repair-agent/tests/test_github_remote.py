@@ -12,6 +12,19 @@ from repair_agent.security import reject_sensitive_content, SecurityError
 
 
 class RemoteGitHubMcpClientTests(unittest.TestCase):
+    def test_write_client_disables_readonly_header(self):
+        client = RemoteGitHubMcpClient(
+            url="https://api.githubcopilot.com/mcp/",
+            token="private-write-token",
+            timeout_seconds=30,
+            read_only=False,
+        )
+
+        headers = client._headers()
+
+        self.assertEqual(headers["X-MCP-Readonly"], "false")
+        self.assertNotIn("private-write-token", str(client.__dict__.keys()))
+
     def test_extracts_embedded_text_resource(self):
         blocks = [
             SimpleNamespace(type="text", text="summary only"),

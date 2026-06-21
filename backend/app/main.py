@@ -10,6 +10,7 @@ from app.models.healing import HealingAction
 from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
 from app.models.repair_attempt import RepairAttempt
+from app.models.repair_publish_audit import RepairPublishAudit
 
 # Existing routers
 from app.routers.failures import router as failures_router

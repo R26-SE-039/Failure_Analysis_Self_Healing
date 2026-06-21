@@ -76,8 +76,13 @@ class FakeMcpClient:
 class FakeProvider:
     model_name = "mock/tool-model"
 
-    def __init__(self, after_excerpt: str = "    return User(name=name)"):
+    def __init__(
+        self,
+        after_excerpt: str = "    return User(name=name)",
+        before_excerpt: str = "    return User(name=name",
+    ):
         self.after_excerpt = after_excerpt
+        self.before_excerpt = before_excerpt
         self.calls = 0
         self.last_evidence = None
 
@@ -99,9 +104,7 @@ class FakeProvider:
                     file_path="app/user_service.py",
                     start_line=10,
                     end_line=10,
-                    before_excerpt=(
-                        "    return User(name=name"
-                    ),
+                    before_excerpt=self.before_excerpt,
                     after_excerpt=self.after_excerpt,
                     reason="Close the constructor call.",
                 )
@@ -170,6 +173,50 @@ class RepairPlannerTests(
 
         with self.assertRaises(PlanValidationError):
             await planner.create_plan(request())
+
+    async def test_rejects_before_excerpt_not_in_exact_sha_content(self):
+        planner = RepairPlanner(
+            settings=settings(),
+            provider=FakeProvider(before_excerpt="different source line"),
+            mcp_client_factory=FakeMcpClient,
+        )
+
+        with self.assertRaises(PlanValidationError) as raised:
+            await planner.create_plan(request())
+
+        diagnostics = raised.exception.safe_diagnostics()
+        self.assertEqual(
+            diagnostics["failed_check_name"],
+            "before_excerpt_mismatch",
+        )
+        self.assertEqual(
+            diagnostics["validation_field_path"],
+            ["proposed_changes", 0, "before_excerpt"],
+        )
+        self.assertEqual(
+            diagnostics["proposed_file_path"],
+            "app/user_service.py",
+        )
+        self.assertNotIn("different source line", str(diagnostics))
+
+    async def test_rejects_empty_after_excerpt_safely(self):
+        planner = RepairPlanner(
+            settings=settings(),
+            provider=FakeProvider(after_excerpt=""),
+            mcp_client_factory=FakeMcpClient,
+        )
+
+        with self.assertRaises(PlanValidationError) as raised:
+            await planner.create_plan(request())
+
+        diagnostics = raised.exception.safe_diagnostics()
+        self.assertEqual(
+            diagnostics["failed_check_name"],
+            "after_excerpt_missing",
+        )
+        self.assertFalse(
+            diagnostics["boolean_flags"]["after_excerpt_present"]
+        )
 
 
 if __name__ == "__main__":

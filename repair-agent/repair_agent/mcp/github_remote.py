@@ -91,16 +91,20 @@ class RemoteGitHubMcpClient:
         url: str,
         token: str,
         timeout_seconds: int,
+        read_only: bool = True,
     ) -> None:
         self.url = url
         self._token = token
         self.timeout_seconds = timeout_seconds
+        self.read_only = read_only
 
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._token}",
             "Accept": "application/json, text/event-stream",
-            "X-MCP-Readonly": "true",
+            "X-MCP-Readonly": (
+                "true" if self.read_only else "false"
+            ),
         }
 
     async def list_tools(self) -> set[str]:
@@ -151,12 +155,12 @@ class RemoteGitHubMcpClient:
                     )
         except Exception as error:
             raise RemoteGitHubMcpError(
-                "Remote GitHub MCP read failed."
+                "Remote GitHub MCP operation failed."
             ) from error
 
         if result.isError:
             raise RemoteGitHubMcpError(
-                "Remote GitHub MCP rejected the read."
+                "Remote GitHub MCP rejected the operation."
             )
 
         text_parts = [

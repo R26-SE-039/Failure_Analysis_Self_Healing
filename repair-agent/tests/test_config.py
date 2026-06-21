@@ -3,6 +3,7 @@ import unittest
 from repair_agent.config import (
     ConfigurationError,
     McpSettings,
+    PublishSettings,
     Settings,
 )
 
@@ -30,6 +31,19 @@ def valid_mcp_environment() -> dict[str, str]:
 
 
 class SettingsTests(unittest.TestCase):
+    def test_publish_settings_require_separate_write_token(self):
+        environment = valid_mcp_environment()
+        with self.assertRaises(ConfigurationError):
+            PublishSettings.from_environment(environment)
+
+        environment["GITHUB_WRITE_MCP_TOKEN"] = "write-only-token"
+        publish = PublishSettings.from_environment(environment)
+        self.assertEqual(
+            publish.github_write_mcp_token,
+            "write-only-token",
+        )
+        self.assertFalse(hasattr(publish, "github_mcp_token"))
+
     def test_loads_mcp_settings_without_openrouter(self):
         environment = valid_mcp_environment()
 

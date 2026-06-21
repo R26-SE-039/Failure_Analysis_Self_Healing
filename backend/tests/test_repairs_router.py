@@ -1,4 +1,5 @@
 import unittest
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +14,7 @@ from app.schemas.repair import (
     ReadOnlyRepairPlan,
     RepairConfirmationRequest,
 )
+from app.services.repair_agent_client import RepairAgentDownstreamError
 
 
 def attempt():
@@ -159,6 +161,51 @@ class RepairConfirmationTests(
         self.assertEqual(repair_attempt.status, "planned")
         self.assertFalse(repair_attempt.github_changes_made)
         self.assertEqual(database.commits, 2)
+
+    async def test_safety_rejection_returns_manual_review_diagnostics(self):
+        repair_attempt = complete_attempt()
+        database = FakeDatabase(repair_attempt)
+        failure = RepairAgentDownstreamError(
+            "plan_validation_failed",
+            "safe-correlation-123",
+            {
+                "failed_stage": "plan_safety_validation",
+                "failed_check_name": "before_excerpt_mismatch",
+                "validation_field_path": [
+                    "proposed_changes",
+                    0,
+                    "before_excerpt",
+                ],
+                "error_type": "safety_validation_error",
+                "proposed_file_path": "app/user_service.py",
+                "start_line": 10,
+                "end_line": 10,
+                "boolean_flags": {
+                    "repairable": True,
+                    "github_changes_made": False,
+                },
+            },
+        )
+
+        with patch(
+            "app.routers.repairs.repair_agent_client.create_plan",
+            new=AsyncMock(side_effect=failure),
+        ):
+            response = await create_read_only_plan(
+                repair_attempt.attempt_id,
+                RepairConfirmationRequest(confirm_read_only=True),
+                db=database,
+            )
+
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(body["error_code"], "plan_validation_failed")
+        self.assertEqual(
+            body["diagnostics"]["failed_check_name"],
+            "before_excerpt_mismatch",
+        )
+        self.assertEqual(repair_attempt.status, "failed")
+        self.assertNotIn("source code", response.body.decode().lower())
 
 
 if __name__ == "__main__":

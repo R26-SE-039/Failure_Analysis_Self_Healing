@@ -59,6 +59,7 @@ def log_stage(
     upstream_http_status: int | None = None,
     retry_after: str | None = None,
     validation_errors: list[dict[str, object]] | None = None,
+    safety_diagnostics: dict[str, object] | None = None,
 ) -> None:
     if stage not in ALLOWED_STAGES:
         stage = "plan_failed"
@@ -106,4 +107,6 @@ def log_stage(
             for item in validation_errors
         ]
         fields.append(f"validation_errors={safe_validation}")
+    if safety_diagnostics:
+        fields.append(f"safety_diagnostics={safety_diagnostics}")
     logger.info(" ".join(fields))

@@ -113,6 +113,22 @@ type RepairPlan = {
   github_changes_made: false;
 };
 
+type RepairPublishResult = {
+  correlation_id: string;
+  attempt_id: string;
+  publish_status: "draft_pr_created";
+  validation_status: string;
+  repair_branch: string;
+  commit_sha: string;
+  draft_pr_number: number;
+  draft_pr_url: string;
+  changed_files: string[];
+  github_changes_made: true;
+  automatic_merge_performed: false;
+  message: "Draft PR created — awaiting developer review";
+  merge_message: "No automatic merge performed";
+};
+
 const ROOT_CAUSE_COLORS: Record<string, string> = {
   locator_issue:       "text-blue-600 bg-blue-50 border-blue-100",
   synchronization_issue: "text-amber-600 bg-amber-50 border-amber-100",
@@ -677,6 +693,9 @@ function ControlledRepairPanel({
   const [repairPlan, setRepairPlan] = useState<RepairPlan | null>(null);
   const [planning, setPlanning] = useState(false);
   const [planningError, setPlanningError] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishResult, setPublishResult] = useState<RepairPublishResult | null>(null);
 
   const startControlledRepair = async () => {
     setPlanning(true);
@@ -707,6 +726,44 @@ function ControlledRepairPanel({
       );
     } finally {
       setPlanning(false);
+    }
+  };
+
+  const publishApprovedRepair = async () => {
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/repairs/${repair.attempt_id}/publish`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm_publish: true }),
+        },
+      );
+      const body = await response.json();
+      if (!response.ok) {
+        const legacyMessage =
+          "This repair plan was created with an older schema. Please rerun Start Controlled Repair.";
+        throw new Error(
+          typeof body.detail === "string"
+            ? body.detail
+            : body.error_code === "legacy_plan_schema"
+              ? legacyMessage
+              : typeof body.failed_check_name === "string"
+                ? `Stored repair plan failed validation: ${body.failed_check_name}.`
+            : "Controlled repair publishing failed.",
+        );
+      }
+      setPublishResult(body as RepairPublishResult);
+    } catch (error: unknown) {
+      setPublishError(
+        error instanceof Error
+          ? error.message
+          : "Controlled repair publishing failed.",
+      );
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -854,6 +911,62 @@ function ControlledRepairPanel({
               </div>
             </div>
           </div>
+
+          {!publishResult && repairPlan.repairable && (
+            <div className="flex justify-end border-t border-[var(--border)] pt-5">
+              <button
+                type="button"
+                onClick={publishApprovedRepair}
+                disabled={publishing}
+                className="inline-flex h-10 items-center gap-2 rounded-lg bg-emerald-700 px-4 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {publishing ? (
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : (
+                  <GitBranch size={15} />
+                )}
+                {publishing ? "Publishing Draft Repair" : "Create Repair Branch"}
+              </button>
+            </div>
+          )}
+
+          {publishError && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs font-bold text-red-700">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+              <span>{publishError}</span>
+            </div>
+          )}
+
+          {publishResult && (
+            <div className="border-t border-emerald-200 bg-emerald-50 px-4 py-5">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-extrabold text-emerald-900">
+                    <CheckCircle2 size={17} />
+                    {publishResult.message}
+                  </p>
+                  <p className="mt-2 font-mono text-xs text-emerald-900">
+                    {publishResult.repair_branch}
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-emerald-800">
+                    Commit {publishResult.commit_sha.slice(0, 12)}
+                  </p>
+                  <p className="mt-3 text-xs font-bold text-slate-700">
+                    {publishResult.merge_message}
+                  </p>
+                </div>
+                <a
+                  href={publishResult.draft_pr_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-300 bg-white px-4 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100"
+                >
+                  Draft PR #{publishResult.draft_pr_number}
+                  <ExternalLink size={14} />
+                </a>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </section>

@@ -101,6 +101,7 @@ async def main() -> None:
         print(f"diagnostic_status=failed error_code={error.code}")
         return
     except PlanValidationError as error:
+        diagnostics = error.safe_diagnostics()
         log_stage(
             "plan_failed",
             "failed",
@@ -109,10 +110,12 @@ async def main() -> None:
             validation_errors=[
                 {"location": [], "type": error.reason_code}
             ],
+            safety_diagnostics=diagnostics,
         )
         print(
             "diagnostic_status=failed "
-            "error_code=plan_validation_failed"
+            "error_code=plan_validation_failed "
+            f"failed_check_name={error.reason_code}"
         )
         return
     except asyncio.TimeoutError as error:

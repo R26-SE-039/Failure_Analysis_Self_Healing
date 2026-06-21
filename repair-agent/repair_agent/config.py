@@ -84,7 +84,6 @@ class McpSettings:
             raise ConfigurationError(
                 "At least one allowed repository is required."
             )
-
         return cls(
             github_mcp_url=github_mcp_url,
             github_mcp_token=_required(
@@ -121,6 +120,74 @@ class McpSettings:
                 env,
                 "REPAIR_TIMEOUT_SECONDS",
                 90,
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class PublishSettings:
+    github_mcp_url: str
+    github_write_mcp_token: str
+    allowed_repositories: frozenset[str]
+    max_tool_calls: int
+    max_files: int
+    max_bytes: int
+    timeout_seconds: int
+
+    @classmethod
+    def from_environment(
+        cls,
+        environment: Mapping[str, str] | None = None,
+    ) -> "PublishSettings":
+        env = environment if environment is not None else os.environ
+        github_mcp_url = _required(env, "GITHUB_MCP_URL")
+        if (
+            urlsplit(github_mcp_url).scheme != "https"
+            or github_mcp_url.rstrip("/")
+            != "https://api.githubcopilot.com/mcp"
+        ):
+            raise ConfigurationError(
+                "GITHUB_MCP_URL must use the official remote endpoint."
+            )
+        repositories = frozenset(
+            item.strip().lower()
+            for item in _required(
+                env,
+                "GITHUB_ALLOWED_REPOSITORIES",
+            ).split(",")
+            if item.strip()
+        )
+        if not repositories:
+            raise ConfigurationError(
+                "At least one allowed repository is required."
+            )
+
+        return cls(
+            github_mcp_url=github_mcp_url,
+            github_write_mcp_token=_required(
+                env,
+                "GITHUB_WRITE_MCP_TOKEN",
+            ),
+            allowed_repositories=repositories,
+            max_tool_calls=_positive_int(
+                env,
+                "REPAIR_PUBLISH_MAX_TOOL_CALLS",
+                12,
+            ),
+            max_files=_positive_int(
+                env,
+                "REPAIR_MAX_FILES",
+                4,
+            ),
+            max_bytes=_positive_int(
+                env,
+                "REPAIR_MAX_BYTES",
+                80000,
+            ),
+            timeout_seconds=_positive_int(
+                env,
+                "REPAIR_PUBLISH_TIMEOUT_SECONDS",
+                120,
             ),
         )
 
