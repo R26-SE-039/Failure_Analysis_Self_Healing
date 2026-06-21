@@ -38,6 +38,11 @@ from app.services.secret_redaction import (
     bounded_sanitized_text,
     redact_secrets,
 )
+from app.services.test_script_notification_service import (
+    NOTIFICATION_MESSAGE,
+    TARGET_MODULE,
+    test_script_notification_service,
+)
 
 router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
 
@@ -192,8 +197,24 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                     healing_plan["requires_validation"],
                 "confidence_gate_applied":
                     healing_plan["confidence_gate_applied"],
+                "automation_level": healing_plan["automation_level"],
+                "allowed_to_plan": healing_plan["allowed_to_plan"],
+                "allowed_to_publish": healing_plan["allowed_to_publish"],
+                "notification_required": healing_plan["notification_required"],
+                "target_team_or_module": healing_plan["target_team_or_module"],
             }
         )
+        if root_cause == "test_script_issue":
+            heal_result.update(
+                {
+                    "repair_type": "Notification only",
+                    "recommendation": healing_plan["recommended_action"],
+                    "status": "Forwarded",
+                    "developer_alert": False,
+                    "old_value": "",
+                    "new_value": "",
+                }
+            )
     except Exception:
         heal_result = {
             "healing_id":     "H-ERROR",
@@ -210,6 +231,11 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 healing_plan["requires_validation"],
             "confidence_gate_applied":
                 healing_plan["confidence_gate_applied"],
+            "automation_level": healing_plan["automation_level"],
+            "allowed_to_plan": healing_plan["allowed_to_plan"],
+            "allowed_to_publish": healing_plan["allowed_to_publish"],
+            "notification_required": healing_plan["notification_required"],
+            "target_team_or_module": healing_plan["target_team_or_module"],
         }
 
     raw_log = req.logs or req.error_message or ""
@@ -226,22 +252,36 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     )
 
     repair_attempt = None
-    if root_cause == "application_defect":
+    notification_audit = None
+    if root_cause in {"application_defect", "test_script_issue"}:
         attempt_id = (
             f"REPAIR-{uuid.uuid4().hex[:12].upper()}"
         )
+        notification_only = root_cause == "test_script_issue"
         repair_attempt = RepairAttempt(
             attempt_id=attempt_id,
             failure_test_id=test_id,
             status=(
-                "eligible"
-                if eligibility.eligible
-                else "ineligible"
+                healing_plan["history_status"]
+                if notification_only
+                else (
+                    "eligible"
+                    if eligibility.eligible
+                    else "ineligible"
+                )
             ),
             mode="read_only",
-            eligible=eligibility.eligible,
-            eligibility_code=eligibility.code,
-            eligibility_reason=eligibility.reason,
+            eligible=(False if notification_only else eligibility.eligible),
+            eligibility_code=(
+                "notification_only"
+                if notification_only
+                else eligibility.code
+            ),
+            eligibility_reason=(
+                f"Forwarded to {TARGET_MODULE}."
+                if notification_only
+                else eligibility.reason
+            ),
             predicted_root_cause=root_cause,
             confidence=confidence,
             decision_source=(
@@ -280,17 +320,31 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 else None
             ),
             error_type=evidence.error_type,
-            error_message=evidence.error_message,
+            error_message=(
+                ""
+                if notification_only
+                else evidence.error_message
+            ),
             candidate_file=evidence.candidate_file,
             candidate_line=evidence.candidate_line,
             log_content_sha256=(
                 evidence.log_content_sha256
             ),
             sanitized_log_excerpt=(
-                evidence.sanitized_log_excerpt
+                ""
+                if notification_only
+                else evidence.sanitized_log_excerpt
             ),
             github_changes_made=False,
         )
+        if notification_only:
+            notification_audit = (
+                test_script_notification_service.create_audit(
+                    attempt_id=attempt_id,
+                    confidence=confidence,
+                    source_run=source_run,
+                )
+            )
 
     # ── Step 3: Flaky Test Detection (Local) ───────────────────────────────────
     try:
@@ -315,7 +369,15 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     # ── Step 4: Notification (Local) ───────────────────────────────────────────
     notification_result = None
     developer_alert = heal_result.get("developer_alert", False)
-    if developer_alert:
+    if root_cause == "test_script_issue":
+        notification_result = {
+            "notification_id": notification_audit.notification_id,
+            "status": "notification_sent",
+            "target_module": TARGET_MODULE,
+            "message": NOTIFICATION_MESSAGE,
+            "github_changes_made": False,
+        }
+    elif developer_alert:
         try:
             notification_result = notifier.create_notification(
                 failure_test_id = test_id,
@@ -367,6 +429,8 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
     if repair_attempt:
         db.add(repair_attempt)
+    if notification_audit:
+        db.add(notification_audit)
 
     if flaky_result.get("is_flaky"):
         flaky_record = FlakyTest(
@@ -378,7 +442,10 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         )
         db.add(flaky_record)
 
-    if notification_result and notification_result.get("status") == "sent":
+    if (
+        notification_result
+        and notification_result.get("status") == "sent"
+    ):
         notif_record = Notification(
             failure_test_id = test_id,
             test_name       = req.test_name,
@@ -415,6 +482,10 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                         repair_attempt.status,
                     "mode": "read_only",
                     "github_changes_made": False,
+                    "automation_level": healing_plan["automation_level"],
+                    "allowed_to_plan": healing_plan["allowed_to_plan"],
+                    "allowed_to_publish": healing_plan["allowed_to_publish"],
+                    "target_module": healing_plan["target_team_or_module"],
                 }
                 if repair_attempt
                 else None

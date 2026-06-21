@@ -96,3 +96,24 @@ export async function fetchDashboardSummary() {
 
   return response.json();
 }
+
+export async function fetchRepairHistory(filters: {
+  rootCause?: string;
+  publishStatus?: string;
+  repository?: string;
+} = {}) {
+  const query = new URLSearchParams();
+  if (filters.rootCause) query.set("root_cause", filters.rootCause);
+  if (filters.publishStatus) query.set("publish_status", filters.publishStatus);
+  if (filters.repository) query.set("repository", filters.repository);
+  const suffix = query.size ? `?${query.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/api/repairs/history${suffix}`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch repair history");
+  }
+
+  return response.json();
+}

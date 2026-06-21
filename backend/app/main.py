@@ -11,6 +11,7 @@ from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
 from app.models.repair_attempt import RepairAttempt
 from app.models.repair_publish_audit import RepairPublishAudit
+from app.models.test_script_notification_audit import TestScriptNotificationAudit
 
 # Existing routers
 from app.routers.failures import router as failures_router

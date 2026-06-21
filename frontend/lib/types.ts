@@ -58,3 +58,26 @@ export type DashboardSummary = {
     healing?: string | null;
   }>;
 };
+
+export type RepairHistoryItem = {
+  attempt_id: string;
+  root_cause: string;
+  confidence: number;
+  repository: string | null;
+  failed_branch: string | null;
+  failed_sha: string | null;
+  github_run_url: string | null;
+  candidate_file: string;
+  candidate_line: number | null;
+  healing_action: string;
+  plan_status: string;
+  publish_status: string | null;
+  action_status: string | null;
+  target_module: string | null;
+  repair_branch: string | null;
+  commit_sha: string | null;
+  draft_pr_url: string | null;
+  github_changes_made: boolean;
+  created_at: string;
+  updated_at: string;
+};

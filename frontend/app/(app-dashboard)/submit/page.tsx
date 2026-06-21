@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Upload, PlusCircle, Layout, Code2, AlertTriangle, Activity, ShieldCheck, Award, ExternalLink, GitBranch, Wrench, FileCode2, CheckCircle2 } from "lucide-react";
+import { Upload, PlusCircle, Layout, Code2, AlertTriangle, Activity, ShieldCheck, Award, ExternalLink, GitBranch, Wrench, FileCode2, CheckCircle2, Send } from "lucide-react";
+import { canShowControlledRepair, isNotificationOnly } from "@/lib/repair-ui-policy";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -68,6 +69,13 @@ type PipelineResult = {
       automatic_execution_allowed: boolean;
       requires_validation: boolean;
       confidence_gate_applied: boolean;
+      automation_level: string;
+      allowed_to_plan: boolean;
+      allowed_to_publish: boolean;
+      recommended_action: string;
+      notification_required: boolean;
+      target_team_or_module: string;
+      history_status: string;
     };
     flaky_analysis: {
       is_flaky: boolean;
@@ -76,7 +84,13 @@ type PipelineResult = {
       instability_score: string;
       recent_pattern: string;
     };
-    notification: { status: string } | null;
+    notification: {
+      status: string;
+      notification_id?: string;
+      target_module?: string;
+      message?: string;
+      github_changes_made?: boolean;
+    } | null;
     repair?: {
       attempt_id: string;
       eligible: boolean;
@@ -84,6 +98,10 @@ type PipelineResult = {
       status: string;
       mode: "read_only";
       github_changes_made: false;
+      automation_level: string;
+      allowed_to_plan: boolean;
+      allowed_to_publish: boolean;
+      target_module?: string;
     } | null;
   };
 };
@@ -494,12 +512,17 @@ function AnalysisResult({ result }: { result: PipelineResult }) {
   const detectedEvidence = detected?.failed_file && detected.failed_file !== "unknown"
     ? `${detected.error_type || "Error"} in ${detected.failed_file}${detected.failed_line && detected.failed_line !== "unknown" ? `:${detected.failed_line}` : ""}`
     : detected?.error_type;
-  const repairMode = plan?.automatic_execution_allowed
+  const notificationOnly = isNotificationOnly(cls.root_cause);
+  const repairMode = notificationOnly
+    ? "Notification only"
+    : plan?.automatic_execution_allowed
     ? "Automatic Supported"
     : plan?.automatic_healing_allowed || plan?.requires_validation
       ? "Controlled Repair"
       : "Manual Gate";
-  const repairModeClass = plan?.automatic_execution_allowed
+  const repairModeClass = notificationOnly
+    ? "bg-cyan-50 text-cyan-700 border-cyan-100"
+    : plan?.automatic_execution_allowed
     ? "bg-emerald-50 text-emerald-700 border-emerald-100"
     : plan?.automatic_healing_allowed || plan?.requires_validation
       ? "bg-blue-50 text-blue-700 border-blue-100"
@@ -564,7 +587,9 @@ function AnalysisResult({ result }: { result: PipelineResult }) {
             <div className="rounded-xl border border-[var(--border)]/40 bg-slate-50/60 p-3">
               <p className="text-[10px] font-extrabold uppercase tracking-wider text-[var(--muted)]">Recommended Action</p>
               <p className="mt-1 text-xs font-mono font-bold text-slate-800 break-all">
-                {(plan?.action || healing.selected_action || "manual_review").replace(/_/g, " ")}
+                {notificationOnly
+                  ? plan.recommended_action
+                  : (plan?.action || healing.selected_action || "manual_review").replace(/_/g, " ")}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <span className={`rounded-xl border px-2.5 py-1 text-[10px] font-bold ${repairModeClass}`}>
@@ -675,7 +700,26 @@ function AnalysisResult({ result }: { result: PipelineResult }) {
           )}
         </div>
       </div>
-      {repair && (
+      {notificationOnly && notification && (
+        <section className="border-y border-cyan-200 bg-cyan-50 px-5 py-5">
+          <div className="flex items-start gap-3">
+            <Send size={18} className="mt-0.5 shrink-0 text-cyan-700" />
+            <div>
+              <p className="text-sm font-extrabold text-cyan-950">Notification only</p>
+              <p className="mt-1 text-sm font-bold text-cyan-800">
+                Forwarded to Test Script Generation Module
+              </p>
+              <p className="mt-2 text-xs font-medium text-slate-700">
+                {notification.message || plan.recommended_action}
+              </p>
+              <p className="mt-3 flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                <CheckCircle2 size={14} /> No GitHub changes made
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+      {repair && canShowControlledRepair(cls.root_cause, plan.allowed_to_plan) && (
         <ControlledRepairPanel
           key={repair.attempt_id}
           repair={repair}

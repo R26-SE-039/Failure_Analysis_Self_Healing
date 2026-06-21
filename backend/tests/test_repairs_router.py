@@ -8,11 +8,13 @@ from fastapi import HTTPException
 from app.routers.repairs import (
     _validated_plan,
     create_read_only_plan,
+    publish_approved_repair,
 )
 from app.schemas.repair import (
     ProposedChange,
     ReadOnlyRepairPlan,
     RepairConfirmationRequest,
+    PublishConfirmationRequest,
 )
 from app.services.repair_agent_client import RepairAgentDownstreamError
 
@@ -206,6 +208,44 @@ class RepairConfirmationTests(
         )
         self.assertEqual(repair_attempt.status, "failed")
         self.assertNotIn("source code", response.body.decode().lower())
+
+    async def test_test_script_issue_never_calls_repair_agent(self):
+        repair_attempt = complete_attempt()
+        repair_attempt.predicted_root_cause = "test_script_issue"
+        repair_attempt.selected_action = "send_to_test_script_component"
+        repair_attempt.eligible = False
+        repair_attempt.eligibility_reason = (
+            "Forwarded to Test Script Generation Module."
+        )
+        database = FakeDatabase(repair_attempt)
+        plan_mock = AsyncMock()
+        publish_mock = AsyncMock()
+
+        with patch(
+            "app.routers.repairs.repair_agent_client.create_plan",
+            new=plan_mock,
+        ):
+            with self.assertRaises(HTTPException) as plan_error:
+                await create_read_only_plan(
+                    repair_attempt.attempt_id,
+                    RepairConfirmationRequest(confirm_read_only=True),
+                    db=database,
+                )
+        with patch(
+            "app.routers.repairs.repair_agent_client.publish_plan",
+            new=publish_mock,
+        ):
+            with self.assertRaises(HTTPException) as publish_error:
+                await publish_approved_repair(
+                    repair_attempt.attempt_id,
+                    PublishConfirmationRequest(confirm_publish=True),
+                    db=database,
+                )
+
+        self.assertEqual(plan_error.exception.status_code, 409)
+        self.assertEqual(publish_error.exception.status_code, 409)
+        plan_mock.assert_not_awaited()
+        publish_mock.assert_not_awaited()
 
 
 if __name__ == "__main__":

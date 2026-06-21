@@ -26,6 +26,39 @@ class HealingOrchestratorTests(unittest.TestCase):
                 self.assertEqual(plan["action"], expected_action)
                 self.assertFalse(plan["confidence_gate_applied"])
 
+    def test_application_defect_policy_preserves_controlled_repair(self):
+        plan = self.orchestrator.create_plan(
+            {
+                "final_root_cause": "application_defect",
+                "ml_confidence_percentage": 81,
+                "decision_source": "machine_learning",
+            }
+        )
+
+        self.assertTrue(plan["allowed_to_plan"])
+        self.assertTrue(plan["allowed_to_publish"])
+        self.assertEqual(plan["automation_level"], "controlled_draft_pr")
+
+    def test_test_script_policy_is_notification_only(self):
+        plan = self.orchestrator.create_plan(
+            {
+                "final_root_cause": "test_script_issue",
+                "ml_confidence_percentage": 92,
+                "decision_source": "machine_learning",
+            }
+        )
+
+        self.assertFalse(plan["allowed_to_plan"])
+        self.assertFalse(plan["allowed_to_publish"])
+        self.assertFalse(plan["automatic_execution_allowed"])
+        self.assertEqual(plan["automation_level"], "notification_only")
+        self.assertTrue(plan["notification_required"])
+        self.assertEqual(
+            plan["target_team_or_module"],
+            "Test Script Generation Module",
+        )
+        self.assertEqual(plan["history_status"], "notification_sent")
+
     def test_low_confidence_preserves_class_but_gates_action(self):
         plan = self.orchestrator.create_plan(
             {

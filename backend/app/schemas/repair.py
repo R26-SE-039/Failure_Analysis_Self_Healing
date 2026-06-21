@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -61,6 +62,31 @@ class RepairAttemptSummary(BaseModel):
     reason: str
     status: str
     mode: Literal["read_only"] = "read_only"
+
+
+class RepairHistoryItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: str
+    root_cause: str
+    confidence: float = Field(ge=0, le=1)
+    repository: Optional[str]
+    failed_branch: Optional[str]
+    failed_sha: Optional[str]
+    github_run_url: Optional[str]
+    candidate_file: str
+    candidate_line: Optional[int]
+    healing_action: str
+    plan_status: str
+    publish_status: Optional[str]
+    action_status: Optional[str]
+    target_module: Optional[str]
+    repair_branch: Optional[str]
+    commit_sha: Optional[str]
+    draft_pr_url: Optional[str]
+    github_changes_made: bool
+    created_at: datetime
+    updated_at: datetime
 
 
 class RepairPlanRequest(BaseModel):

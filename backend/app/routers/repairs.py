@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import PurePosixPath
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -12,10 +13,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.repair_attempt import RepairAttempt
 from app.models.repair_publish_audit import RepairPublishAudit
+from app.models.test_script_notification_audit import (
+    TestScriptNotificationAudit,
+)
 from app.schemas.repair import (
     PublishConfirmationRequest,
     ReadOnlyRepairPlan,
     RepairConfirmationRequest,
+    RepairHistoryItem,
     RepairPlanRequest,
 )
 from app.services.repair_agent_client import (
@@ -25,6 +30,7 @@ from app.services.repair_agent_client import (
     RepairPublishError,
     repair_agent_client,
 )
+from app.services.healing_orchestrator import healing_orchestrator
 from app.services.repair_publish_service import (
     BRANCH_HEAD_MISMATCH_MESSAGE,
     PublishSafetyError,
@@ -57,6 +63,97 @@ PUBLISH_RECOVERY_ERROR_CODES = {
     "draft_pr_identity_missing",
     "publish_partial_manual_review_required",
 }
+
+
+def _repository_name(attempt: RepairAttempt) -> Optional[str]:
+    if not attempt.repository_owner or not attempt.repository_name:
+        return None
+    return f"{attempt.repository_owner}/{attempt.repository_name}".lower()
+
+
+@router.get("/history", response_model=list[RepairHistoryItem])
+def get_repair_history(
+    root_cause: Optional[str] = None,
+    publish_status: Optional[str] = None,
+    repository: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(
+            RepairAttempt,
+            RepairPublishAudit,
+            TestScriptNotificationAudit,
+        )
+        .outerjoin(
+            RepairPublishAudit,
+            RepairPublishAudit.attempt_id == RepairAttempt.attempt_id,
+        )
+        .outerjoin(
+            TestScriptNotificationAudit,
+            TestScriptNotificationAudit.attempt_id == RepairAttempt.attempt_id,
+        )
+        .order_by(RepairAttempt.created_at.desc())
+        .all()
+    )
+    repository_filter = repository.strip().lower() if repository else None
+    history: list[RepairHistoryItem] = []
+    for attempt, audit, notification_audit in rows:
+        repository_name = _repository_name(attempt)
+        current_publish_status = audit.publish_status if audit else None
+        if root_cause and attempt.predicted_root_cause != root_cause:
+            continue
+        action_status = (
+            notification_audit.status if notification_audit else None
+        )
+        if (
+            publish_status
+            and current_publish_status != publish_status
+            and action_status != publish_status
+        ):
+            continue
+        if repository_filter and repository_name != repository_filter:
+            continue
+        run_url = (
+            f"https://github.com/{repository_name}/actions/runs/{attempt.run_id}"
+            if repository_name and attempt.run_id
+            else None
+        )
+        history.append(
+            RepairHistoryItem(
+                attempt_id=attempt.attempt_id,
+                root_cause=attempt.predicted_root_cause,
+                confidence=attempt.confidence,
+                repository=repository_name,
+                failed_branch=attempt.head_branch,
+                failed_sha=attempt.head_sha,
+                github_run_url=run_url,
+                candidate_file=attempt.candidate_file,
+                candidate_line=attempt.candidate_line,
+                healing_action=attempt.selected_action,
+                plan_status=attempt.status,
+                publish_status=current_publish_status,
+                action_status=action_status,
+                target_module=(
+                    notification_audit.target_module
+                    if notification_audit
+                    else None
+                ),
+                repair_branch=(audit.repair_branch if audit else None),
+                commit_sha=(audit.commit_sha if audit else None),
+                draft_pr_url=(audit.draft_pr_url if audit else None),
+                github_changes_made=bool(
+                    attempt.github_changes_made
+                    or (audit and audit.github_changes_made)
+                ),
+                created_at=attempt.created_at,
+                updated_at=(
+                    max(attempt.updated_at, audit.updated_at)
+                    if audit and audit.updated_at
+                    else attempt.updated_at
+                ),
+            )
+        )
+    return history
 
 
 def _validated_plan(
@@ -186,6 +283,18 @@ async def create_read_only_plan(
         raise HTTPException(
             status_code=404,
             detail="Repair attempt not found.",
+        )
+    action_policy = healing_orchestrator.create_plan(
+        {
+            "final_root_cause": attempt.predicted_root_cause,
+            "confidence": attempt.confidence,
+            "decision_source": attempt.decision_source,
+        }
+    )
+    if not action_policy["allowed_to_plan"]:
+        raise HTTPException(
+            status_code=409,
+            detail="This root cause is not eligible for repair planning.",
         )
     if not attempt.eligible:
         raise HTTPException(
@@ -327,6 +436,19 @@ async def publish_approved_repair(
     attempt = attempt_query.first()
     if not attempt:
         raise HTTPException(status_code=404, detail="Repair attempt not found.")
+
+    action_policy = healing_orchestrator.create_plan(
+        {
+            "final_root_cause": attempt.predicted_root_cause,
+            "confidence": attempt.confidence,
+            "decision_source": attempt.decision_source,
+        }
+    )
+    if not action_policy["allowed_to_publish"]:
+        raise HTTPException(
+            status_code=409,
+            detail="This root cause is not eligible for GitHub publishing.",
+        )
 
     existing = (
         db.query(RepairPublishAudit)

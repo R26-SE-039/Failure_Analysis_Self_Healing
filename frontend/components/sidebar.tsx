@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Siren, Wrench, BarChart3, Send, FlaskConical, BrainCircuit } from "lucide-react";
+import { LayoutDashboard, Siren, Wrench, BarChart3, Send, FlaskConical, BrainCircuit, ClipboardList } from "lucide-react";
 
 const menuItems = [
   { name: "Dashboard",     href: "/",             icon: LayoutDashboard },
   { name: "Submit Failure",href: "/submit",        icon: FlaskConical },
   { name: "Failures",      href: "/failures",      icon: Siren },
   { name: "Healing",       href: "/healing",       icon: Wrench },
+  { name: "Repair History",href: "/repair-history",icon: ClipboardList },
   { name: "Analytics",     href: "/analytics",     icon: BarChart3 },
   { name: "Alert Outbox",  href: "/notifications", icon: Send },
 ];
