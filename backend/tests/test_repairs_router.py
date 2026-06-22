@@ -247,6 +247,51 @@ class RepairConfirmationTests(
         plan_mock.assert_not_awaited()
         publish_mock.assert_not_awaited()
 
+    async def test_all_other_root_causes_never_call_repair_agent(self):
+        root_causes = {
+            "dependency_issue",
+            "workflow_environment_issue",
+            "network_issue",
+            "infrastructure_resource_issue",
+            "deployment_issue",
+            "security_policy_issue",
+            "other_or_unknown",
+        }
+        for root_cause in root_causes:
+            with self.subTest(root_cause=root_cause):
+                repair_attempt = complete_attempt()
+                repair_attempt.predicted_root_cause = root_cause
+                repair_attempt.eligible = False
+                database = FakeDatabase(repair_attempt)
+                plan_mock = AsyncMock()
+                publish_mock = AsyncMock()
+                with patch(
+                    "app.routers.repairs.repair_agent_client.create_plan",
+                    new=plan_mock,
+                ):
+                    with self.assertRaises(HTTPException):
+                        await create_read_only_plan(
+                            repair_attempt.attempt_id,
+                            RepairConfirmationRequest(
+                                confirm_read_only=True
+                            ),
+                            db=database,
+                        )
+                with patch(
+                    "app.routers.repairs.repair_agent_client.publish_plan",
+                    new=publish_mock,
+                ):
+                    with self.assertRaises(HTTPException):
+                        await publish_approved_repair(
+                            repair_attempt.attempt_id,
+                            PublishConfirmationRequest(
+                                confirm_publish=True
+                            ),
+                            db=database,
+                        )
+                plan_mock.assert_not_awaited()
+                publish_mock.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

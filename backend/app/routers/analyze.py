@@ -43,6 +43,9 @@ from app.services.test_script_notification_service import (
     TARGET_MODULE,
     test_script_notification_service,
 )
+from app.services.root_cause_action_audit_service import (
+    root_cause_action_audit_service,
+)
 
 router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
 
@@ -204,12 +207,14 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 "target_team_or_module": healing_plan["target_team_or_module"],
             }
         )
-        if root_cause == "test_script_issue":
+        if root_cause != "application_defect":
             heal_result.update(
                 {
-                    "repair_type": "Notification only",
+                    "repair_type": healing_plan["automation_level"].replace(
+                        "_", " "
+                    ).title(),
                     "recommendation": healing_plan["recommended_action"],
-                    "status": "Forwarded",
+                    "status": healing_plan["history_status"],
                     "developer_alert": False,
                     "old_value": "",
                     "new_value": "",
@@ -253,17 +258,19 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
     repair_attempt = None
     notification_audit = None
-    if root_cause in {"application_defect", "test_script_issue"}:
+    action_audit = None
+    if root_cause in healing_orchestrator.ACTION_MATRIX:
         attempt_id = (
             f"REPAIR-{uuid.uuid4().hex[:12].upper()}"
         )
-        notification_only = root_cause == "test_script_issue"
+        non_application_action = root_cause != "application_defect"
+        test_script_notification = root_cause == "test_script_issue"
         repair_attempt = RepairAttempt(
             attempt_id=attempt_id,
             failure_test_id=test_id,
             status=(
                 healing_plan["history_status"]
-                if notification_only
+                if non_application_action
                 else (
                     "eligible"
                     if eligibility.eligible
@@ -271,15 +278,17 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 )
             ),
             mode="read_only",
-            eligible=(False if notification_only else eligibility.eligible),
+            eligible=(False if non_application_action else eligibility.eligible),
             eligibility_code=(
-                "notification_only"
-                if notification_only
+                healing_plan["automation_level"]
+                if non_application_action
                 else eligibility.code
             ),
             eligibility_reason=(
                 f"Forwarded to {TARGET_MODULE}."
-                if notification_only
+                if test_script_notification
+                else healing_plan["recommended_action"]
+                if non_application_action
                 else eligibility.reason
             ),
             predicted_root_cause=root_cause,
@@ -322,7 +331,7 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
             error_type=evidence.error_type,
             error_message=(
                 ""
-                if notification_only
+                if non_application_action
                 else evidence.error_message
             ),
             candidate_file=evidence.candidate_file,
@@ -332,18 +341,26 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
             ),
             sanitized_log_excerpt=(
                 ""
-                if notification_only
+                if non_application_action
                 else evidence.sanitized_log_excerpt
             ),
             github_changes_made=False,
         )
-        if notification_only:
+        if test_script_notification:
             notification_audit = (
                 test_script_notification_service.create_audit(
                     attempt_id=attempt_id,
                     confidence=confidence,
                     source_run=source_run,
                 )
+            )
+        elif non_application_action:
+            action_audit = root_cause_action_audit_service.create_audit(
+                attempt_id=attempt_id,
+                root_cause=root_cause,
+                confidence=confidence,
+                policy=healing_plan,
+                source_run=source_run,
             )
 
     # ── Step 3: Flaky Test Detection (Local) ───────────────────────────────────
@@ -375,6 +392,17 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
             "status": "notification_sent",
             "target_module": TARGET_MODULE,
             "message": NOTIFICATION_MESSAGE,
+            "github_changes_made": False,
+        }
+    elif action_audit:
+        notification_result = {
+            "audit_id": action_audit.audit_id,
+            "status": action_audit.history_status,
+            "automation_level": action_audit.automation_level,
+            "notification_required": action_audit.notification_required,
+            "target_module": action_audit.target_team_or_module,
+            "message": action_audit.recommended_action,
+            "validation_guidance": action_audit.validation_guidance,
             "github_changes_made": False,
         }
     elif developer_alert:
@@ -431,6 +459,8 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         db.add(repair_attempt)
     if notification_audit:
         db.add(notification_audit)
+    if action_audit:
+        db.add(action_audit)
 
     if flaky_result.get("is_flaky"):
         flaky_record = FlakyTest(
@@ -486,6 +516,9 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                     "allowed_to_plan": healing_plan["allowed_to_plan"],
                     "allowed_to_publish": healing_plan["allowed_to_publish"],
                     "target_module": healing_plan["target_team_or_module"],
+                    "recommended_action": healing_plan["recommended_action"],
+                    "validation_guidance": healing_plan["validation_guidance"],
+                    "history_status": healing_plan["history_status"],
                 }
                 if repair_attempt
                 else None

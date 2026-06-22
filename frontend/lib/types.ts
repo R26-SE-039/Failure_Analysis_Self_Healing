@@ -74,6 +74,10 @@ export type RepairHistoryItem = {
   publish_status: string | null;
   action_status: string | null;
   target_module: string | null;
+  automation_level: string;
+  recommended_action: string;
+  validation_guidance: string[];
+  history_status: string;
   repair_branch: string | null;
   commit_sha: string | null;
   draft_pr_url: string | null;

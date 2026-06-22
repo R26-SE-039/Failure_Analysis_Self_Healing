@@ -59,6 +59,63 @@ class HealingOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(plan["history_status"], "notification_sent")
 
+    def test_remaining_root_cause_policy_matrix(self):
+        expected = {
+            "dependency_issue": (
+                "diagnostic_only",
+                "dependency_review_required",
+                "Dependency / Build Owner",
+            ),
+            "workflow_environment_issue": (
+                "notification_only",
+                "workflow_environment_review_required",
+                "CI/CD Workflow Owner",
+            ),
+            "network_issue": (
+                "diagnostic_only",
+                "retry_recommended",
+                "External Service / Network Owner",
+            ),
+            "infrastructure_resource_issue": (
+                "notification_only",
+                "infrastructure_review_required",
+                "Infrastructure / Runner Owner",
+            ),
+            "deployment_issue": (
+                "notification_only",
+                "deployment_review_required",
+                "Deployment Owner",
+            ),
+            "security_policy_issue": (
+                "manual_review_required",
+                "security_review_required",
+                "Security / Compliance Owner",
+            ),
+            "other_or_unknown": (
+                "manual_triage_required",
+                "manual_triage_required",
+                "Developer / Manual Triage",
+            ),
+        }
+        for root_cause, values in expected.items():
+            with self.subTest(root_cause=root_cause):
+                plan = self.orchestrator.create_plan(
+                    {
+                        "final_root_cause": root_cause,
+                        "ml_confidence_percentage": 90,
+                        "decision_source": "machine_learning",
+                    }
+                )
+                automation, history, target = values
+                self.assertEqual(plan["automation_level"], automation)
+                self.assertEqual(plan["history_status"], history)
+                self.assertEqual(plan["target_team_or_module"], target)
+                self.assertFalse(plan["allowed_to_plan"])
+                self.assertFalse(plan["allowed_to_publish"])
+                self.assertFalse(plan["github_changes_made"])
+                self.assertTrue(plan["recommended_action"])
+                self.assertIsInstance(plan["validation_guidance"], list)
+
     def test_low_confidence_preserves_class_but_gates_action(self):
         plan = self.orchestrator.create_plan(
             {

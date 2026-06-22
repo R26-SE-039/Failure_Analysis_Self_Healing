@@ -16,6 +16,7 @@ from app.models.repair_publish_audit import RepairPublishAudit
 from app.models.test_script_notification_audit import (
     TestScriptNotificationAudit,
 )
+from app.models.root_cause_action_audit import RootCauseActionAudit
 from app.schemas.repair import (
     PublishConfirmationRequest,
     ReadOnlyRepairPlan,
@@ -83,6 +84,7 @@ def get_repair_history(
             RepairAttempt,
             RepairPublishAudit,
             TestScriptNotificationAudit,
+            RootCauseActionAudit,
         )
         .outerjoin(
             RepairPublishAudit,
@@ -92,18 +94,33 @@ def get_repair_history(
             TestScriptNotificationAudit,
             TestScriptNotificationAudit.attempt_id == RepairAttempt.attempt_id,
         )
+        .outerjoin(
+            RootCauseActionAudit,
+            RootCauseActionAudit.attempt_id == RepairAttempt.attempt_id,
+        )
         .order_by(RepairAttempt.created_at.desc())
         .all()
     )
     repository_filter = repository.strip().lower() if repository else None
     history: list[RepairHistoryItem] = []
-    for attempt, audit, notification_audit in rows:
+    for attempt, audit, notification_audit, action_audit in rows:
         repository_name = _repository_name(attempt)
         current_publish_status = audit.publish_status if audit else None
         if root_cause and attempt.predicted_root_cause != root_cause:
             continue
         action_status = (
-            notification_audit.status if notification_audit else None
+            notification_audit.status
+            if notification_audit
+            else action_audit.history_status
+            if action_audit
+            else None
+        )
+        policy = healing_orchestrator.create_plan(
+            {
+                "final_root_cause": attempt.predicted_root_cause,
+                "confidence": attempt.confidence,
+                "decision_source": attempt.decision_source,
+            }
         )
         if (
             publish_status
@@ -136,14 +153,54 @@ def get_repair_history(
                 target_module=(
                     notification_audit.target_module
                     if notification_audit
+                    else action_audit.target_team_or_module
+                    if action_audit
+                    else policy["target_team_or_module"]
+                ),
+                automation_level=(
+                    action_audit.automation_level
+                    if action_audit
+                    else policy["automation_level"]
+                ),
+                recommended_action=(
+                    action_audit.recommended_action
+                    if action_audit
+                    else policy["recommended_action"]
+                ),
+                validation_guidance=(
+                    action_audit.validation_guidance
+                    if action_audit
+                    else policy["validation_guidance"]
+                ),
+                history_status=(
+                    action_audit.history_status
+                    if action_audit
+                    else action_status or attempt.status
+                ),
+                repair_branch=(
+                    audit.repair_branch
+                    if audit
+                    and attempt.predicted_root_cause == "application_defect"
                     else None
                 ),
-                repair_branch=(audit.repair_branch if audit else None),
-                commit_sha=(audit.commit_sha if audit else None),
-                draft_pr_url=(audit.draft_pr_url if audit else None),
+                commit_sha=(
+                    audit.commit_sha
+                    if audit
+                    and attempt.predicted_root_cause == "application_defect"
+                    else None
+                ),
+                draft_pr_url=(
+                    audit.draft_pr_url
+                    if audit
+                    and attempt.predicted_root_cause == "application_defect"
+                    else None
+                ),
                 github_changes_made=bool(
-                    attempt.github_changes_made
-                    or (audit and audit.github_changes_made)
+                    attempt.predicted_root_cause == "application_defect"
+                    and (
+                        attempt.github_changes_made
+                        or (audit and audit.github_changes_made)
+                    )
                 ),
                 created_at=attempt.created_at,
                 updated_at=(

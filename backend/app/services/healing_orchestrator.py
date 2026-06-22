@@ -12,6 +12,8 @@ class HealingOrchestrator:
             "notification_required": False,
             "target_team_or_module": "Application Development Team",
             "history_status": "eligible",
+            "validation_guidance": [],
+            "github_changes_made": False,
         },
         "test_script_issue": {
             "action": "send_to_test_script_component",
@@ -25,87 +27,139 @@ class HealingOrchestrator:
             "notification_required": True,
             "target_team_or_module": "Test Script Generation Module",
             "history_status": "notification_sent",
+            "validation_guidance": [],
+            "github_changes_made": False,
         },
         "network_issue": {
             "action": "retry_pipeline",
-            "automation_level": "controlled_retry",
+            "automation_level": "diagnostic_only",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Apply the bounded pipeline retry policy.",
-            "notification_required": True,
-            "target_team_or_module": "DevOps Team",
-            "history_status": "suggested",
+            "recommended_action": (
+                "Treat as possible transient failure. Retry workflow and "
+                "check DNS, timeout, external API availability, and rate limits."
+            ),
+            "notification_required": False,
+            "target_team_or_module": "External Service / Network Owner",
+            "history_status": "retry_recommended",
+            "validation_guidance": [
+                "Retry the failed workflow once.",
+                "Check DNS, timeout, API availability, and rate limits.",
+            ],
+            "github_changes_made": False,
         },
         "dependency_issue": {
             "action": "prepare_dependency_fix",
-            "automation_level": "recommendation_only",
+            "automation_level": "diagnostic_only",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Review dependency and lockfile evidence.",
+            "recommended_action": (
+                "Review missing dependency, version conflict, lockfile "
+                "mismatch, or package installation failure."
+            ),
             "notification_required": True,
-            "target_team_or_module": "Application Development Team",
-            "history_status": "suggested",
+            "target_team_or_module": "Dependency / Build Owner",
+            "history_status": "dependency_review_required",
+            "validation_guidance": [
+                "pip install -r requirements.txt",
+                "npm install",
+                "npm test",
+            ],
+            "github_changes_made": False,
         },
         "workflow_environment_issue": {
             "action": "prepare_workflow_fix",
-            "automation_level": "recommendation_only",
+            "automation_level": "notification_only",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Review workflow environment configuration.",
+            "recommended_action": (
+                "Review GitHub Actions runner, workflow YAML, runtime version, "
+                "working directory, cache path, and environment configuration."
+            ),
             "notification_required": True,
-            "target_team_or_module": "DevOps Team",
-            "history_status": "suggested",
+            "target_team_or_module": "CI/CD Workflow Owner",
+            "history_status": "workflow_environment_review_required",
+            "validation_guidance": [
+                "Review workflow syntax and runner/runtime configuration.",
+                "Verify working directory, cache paths, and environment names.",
+            ],
+            "github_changes_made": False,
         },
         "infrastructure_resource_issue": {
             "action": "retry_or_resource_review",
-            "automation_level": "manual_review",
+            "automation_level": "notification_only",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Review runner resources and capacity.",
+            "recommended_action": (
+                "Review CI runner memory, disk, CPU, timeout, job parallelism, "
+                "and cache usage."
+            ),
             "notification_required": True,
-            "target_team_or_module": "Infrastructure Team",
-            "history_status": "manual_review",
+            "target_team_or_module": "Infrastructure / Runner Owner",
+            "history_status": "infrastructure_review_required",
+            "validation_guidance": [
+                "Review runner resource metrics and job timeout settings.",
+            ],
+            "github_changes_made": False,
         },
         "deployment_issue": {
             "action": "rollback_or_manual_review",
-            "automation_level": "manual_review",
+            "automation_level": "notification_only",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Review deployment and rollback safety.",
+            "recommended_action": (
+                "Review deployment configuration, target environment, cloud "
+                "CLI authentication, permissions, and deployment variables."
+            ),
             "notification_required": True,
-            "target_team_or_module": "DevOps Team",
-            "history_status": "manual_review",
+            "target_team_or_module": "Deployment Owner",
+            "history_status": "deployment_review_required",
+            "validation_guidance": [
+                "Verify deployment target, credentials, permissions, and variables.",
+            ],
+            "github_changes_made": False,
         },
         "security_policy_issue": {
             "action": "block_and_security_review",
-            "automation_level": "blocked",
+            "automation_level": "manual_review_required",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Block release and request security review.",
+            "recommended_action": (
+                "Review policy violation, permission restriction, secret "
+                "scanning result, dependency vulnerability, or compliance "
+                "rule. Do not auto-fix."
+            ),
             "notification_required": True,
-            "target_team_or_module": "Security Team",
-            "history_status": "manual_review",
+            "target_team_or_module": "Security / Compliance Owner",
+            "history_status": "security_review_required",
+            "validation_guidance": [
+                "Require security or compliance owner review before rerun.",
+            ],
+            "github_changes_made": False,
         },
         "other_or_unknown": {
             "action": "manual_review",
-            "automation_level": "manual_review",
+            "automation_level": "manual_triage_required",
             "allowed_to_plan": False,
             "allowed_to_publish": False,
-            "recommended_action": "Route this failure for manual review.",
-            "notification_required": True,
-            "target_team_or_module": "Failure Triage Team",
-            "history_status": "manual_review",
+            "recommended_action": (
+                "Manual inspection required because the root cause is unknown "
+                "or confidence is insufficient."
+            ),
+            "notification_required": False,
+            "target_team_or_module": "Developer / Manual Triage",
+            "history_status": "manual_triage_required",
+            "validation_guidance": [
+                "Inspect sanitized failure evidence and assign an owner manually.",
+            ],
+            "github_changes_made": False,
         },
     }
 
-    AUTOMATIC_ACTIONS = {
-        "retry_pipeline",
-    }
+    AUTOMATIC_ACTIONS = set()
 
     VALIDATION_REQUIRED_ACTIONS = {
         "start_mcp_code_repair",
-        "prepare_dependency_fix",
-        "prepare_workflow_fix",
     }
 
     MINIMUM_AUTOMATIC_CONFIDENCE = 60.0

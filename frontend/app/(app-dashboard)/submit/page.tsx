@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback } from "react";
 import { Upload, PlusCircle, Layout, Code2, AlertTriangle, Activity, ShieldCheck, Award, ExternalLink, GitBranch, Wrench, FileCode2, CheckCircle2, Send } from "lucide-react";
-import { canShowControlledRepair, isNotificationOnly } from "@/lib/repair-ui-policy";
+import { actionTargetLabel, canShowControlledRepair } from "@/lib/repair-ui-policy";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -76,6 +76,8 @@ type PipelineResult = {
       notification_required: boolean;
       target_team_or_module: string;
       history_status: string;
+      validation_guidance: string[];
+      github_changes_made: boolean;
     };
     flaky_analysis: {
       is_flaky: boolean;
@@ -90,6 +92,9 @@ type PipelineResult = {
       target_module?: string;
       message?: string;
       github_changes_made?: boolean;
+      automation_level?: string;
+      notification_required?: boolean;
+      validation_guidance?: string[];
     } | null;
     repair?: {
       attempt_id: string;
@@ -102,6 +107,9 @@ type PipelineResult = {
       allowed_to_plan: boolean;
       allowed_to_publish: boolean;
       target_module?: string;
+      recommended_action: string;
+      validation_guidance: string[];
+      history_status: string;
     } | null;
   };
 };
@@ -512,15 +520,15 @@ function AnalysisResult({ result }: { result: PipelineResult }) {
   const detectedEvidence = detected?.failed_file && detected.failed_file !== "unknown"
     ? `${detected.error_type || "Error"} in ${detected.failed_file}${detected.failed_line && detected.failed_line !== "unknown" ? `:${detected.failed_line}` : ""}`
     : detected?.error_type;
-  const notificationOnly = isNotificationOnly(cls.root_cause);
-  const repairMode = notificationOnly
-    ? "Notification only"
+  const nonApplicationAction = cls.root_cause !== "application_defect";
+  const repairMode = nonApplicationAction
+    ? plan.automation_level.replace(/_/g, " ")
     : plan?.automatic_execution_allowed
     ? "Automatic Supported"
     : plan?.automatic_healing_allowed || plan?.requires_validation
       ? "Controlled Repair"
       : "Manual Gate";
-  const repairModeClass = notificationOnly
+  const repairModeClass = nonApplicationAction
     ? "bg-cyan-50 text-cyan-700 border-cyan-100"
     : plan?.automatic_execution_allowed
     ? "bg-emerald-50 text-emerald-700 border-emerald-100"
@@ -587,7 +595,7 @@ function AnalysisResult({ result }: { result: PipelineResult }) {
             <div className="rounded-xl border border-[var(--border)]/40 bg-slate-50/60 p-3">
               <p className="text-[10px] font-extrabold uppercase tracking-wider text-[var(--muted)]">Recommended Action</p>
               <p className="mt-1 text-xs font-mono font-bold text-slate-800 break-all">
-                {notificationOnly
+                {nonApplicationAction
                   ? plan.recommended_action
                   : (plan?.action || healing.selected_action || "manual_review").replace(/_/g, " ")}
               </p>
@@ -700,18 +708,38 @@ function AnalysisResult({ result }: { result: PipelineResult }) {
           )}
         </div>
       </div>
-      {notificationOnly && notification && (
+      {nonApplicationAction && notification && (
         <section className="border-y border-cyan-200 bg-cyan-50 px-5 py-5">
           <div className="flex items-start gap-3">
             <Send size={18} className="mt-0.5 shrink-0 text-cyan-700" />
             <div>
-              <p className="text-sm font-extrabold text-cyan-950">Notification only</p>
+              <p className="text-sm font-extrabold capitalize text-cyan-950">
+                {plan.automation_level.replace(/_/g, " ")}
+              </p>
               <p className="mt-1 text-sm font-bold text-cyan-800">
-                Forwarded to Test Script Generation Module
+                {actionTargetLabel(
+                  cls.root_cause,
+                  plan.target_team_or_module,
+                )}
               </p>
               <p className="mt-2 text-xs font-medium text-slate-700">
                 {notification.message || plan.recommended_action}
               </p>
+              <p className="mt-2 text-xs font-bold capitalize text-slate-700">
+                Status: {plan.history_status.replace(/_/g, " ")}
+              </p>
+              {plan.validation_guidance.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-[10px] font-extrabold uppercase text-slate-600">
+                    Validation guidance
+                  </p>
+                  <ul className="mt-1 space-y-1 text-xs text-slate-700">
+                    {plan.validation_guidance.map((guidance) => (
+                      <li key={guidance} className="font-mono">{guidance}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <p className="mt-3 flex items-center gap-1.5 text-xs font-bold text-emerald-700">
                 <CheckCircle2 size={14} /> No GitHub changes made
               </p>

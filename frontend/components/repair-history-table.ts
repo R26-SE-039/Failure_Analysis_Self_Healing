@@ -122,8 +122,16 @@ export default function RepairHistoryTable({
             cell(
               "healing",
               h("div", null,
-                h("p", { className: "font-medium capitalize text-slate-700" }, label(item.healing_action)),
-                h("p", { className: "mt-2 font-bold capitalize text-blue-700" }, label(item.plan_status)),
+                h("p", { className: "font-bold capitalize text-cyan-700" }, label(item.automation_level)),
+                h("p", { className: "mt-1 max-w-64 text-slate-700" }, item.recommended_action),
+                h("p", { className: "mt-2 font-bold capitalize text-blue-700" }, label(item.history_status)),
+                item.validation_guidance.length > 0
+                  ? h("ul", { className: "mt-2 space-y-1 font-mono text-[10px] text-[var(--muted)]" },
+                      ...item.validation_guidance.map((guidance) =>
+                        h("li", { key: guidance }, guidance),
+                      ),
+                    )
+                  : null,
               ),
             ),
             cell(

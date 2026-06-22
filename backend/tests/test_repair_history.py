@@ -35,6 +35,7 @@ def attempt(**overrides):
         "attempt_id": "REPAIR-HISTORY-1",
         "predicted_root_cause": "application_defect",
         "confidence": 0.811,
+        "decision_source": "machine_learning",
         "repository_owner": "Example",
         "repository_name": "Project",
         "run_id": 123,
@@ -77,10 +78,22 @@ def notification_audit(**overrides):
     return SimpleNamespace(**values)
 
 
+def action_audit(**overrides):
+    values = {
+        "automation_level": "diagnostic_only",
+        "target_team_or_module": "Dependency / Build Owner",
+        "recommended_action": "Review dependency failure.",
+        "validation_guidance": ["npm test"],
+        "history_status": "dependency_review_required",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 class RepairHistoryTests(unittest.TestCase):
     def test_returns_only_safe_audit_projection(self):
         result = get_repair_history(
-            db=FakeDatabase([(attempt(), audit(), None)])
+            db=FakeDatabase([(attempt(), audit(), None, None)])
         )
 
         self.assertEqual(len(result), 1)
@@ -106,7 +119,7 @@ class RepairHistoryTests(unittest.TestCase):
 
     def test_filters_root_cause_status_and_repository(self):
         rows = [
-            (attempt(), audit(), None),
+            (attempt(), audit(), None, None),
             (
                 attempt(
                     attempt_id="REPAIR-HISTORY-2",
@@ -115,6 +128,7 @@ class RepairHistoryTests(unittest.TestCase):
                 ),
                 None,
                 notification_audit(),
+                None,
             ),
         ]
         database = FakeDatabase(rows)
@@ -151,6 +165,7 @@ class RepairHistoryTests(unittest.TestCase):
                         ),
                         None,
                         notification_audit(),
+                        None,
                     )
                 ]
             )
@@ -166,6 +181,29 @@ class RepairHistoryTests(unittest.TestCase):
         self.assertIsNone(result.repair_branch)
         self.assertIsNone(result.commit_sha)
         self.assertIsNone(result.draft_pr_url)
+
+    def test_remaining_root_cause_uses_safe_action_audit(self):
+        result = get_repair_history(
+            db=FakeDatabase(
+                [
+                    (
+                        attempt(
+                            predicted_root_cause="dependency_issue",
+                            status="dependency_review_required",
+                        ),
+                        None,
+                        None,
+                        action_audit(),
+                    )
+                ]
+            )
+        )[0]
+
+        self.assertEqual(result.automation_level, "diagnostic_only")
+        self.assertEqual(result.history_status, "dependency_review_required")
+        self.assertEqual(result.target_module, "Dependency / Build Owner")
+        self.assertEqual(result.validation_guidance, ["npm test"])
+        self.assertFalse(result.github_changes_made)
 
 
 if __name__ == "__main__":

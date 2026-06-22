@@ -81,6 +81,10 @@ class RepairHistoryItem(BaseModel):
     publish_status: Optional[str]
     action_status: Optional[str]
     target_module: Optional[str]
+    automation_level: str
+    recommended_action: str
+    validation_guidance: list[str]
+    history_status: str
     repair_branch: Optional[str]
     commit_sha: Optional[str]
     draft_pr_url: Optional[str]

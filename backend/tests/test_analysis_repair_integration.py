@@ -9,6 +9,7 @@ from app.models.repair_attempt import RepairAttempt
 from app.models.test_script_notification_audit import (
     TestScriptNotificationAudit,
 )
+from app.models.root_cause_action_audit import RootCauseActionAudit
 from app.routers.analyze import analyze_failure
 from tests.test_classifier_regression import _frontend_request
 
@@ -179,6 +180,69 @@ class AnalysisRepairIntegrationTests(
         serialized = str(result["pipeline"]["notification"])
         self.assertNotIn(raw_log, serialized)
         self.assertNotIn("token", serialized.lower())
+
+    async def test_remaining_root_causes_record_safe_action_statuses(self):
+        expected = {
+            "dependency_issue": "dependency_review_required",
+            "workflow_environment_issue": (
+                "workflow_environment_review_required"
+            ),
+            "network_issue": "retry_recommended",
+            "infrastructure_resource_issue": (
+                "infrastructure_review_required"
+            ),
+            "deployment_issue": "deployment_review_required",
+            "security_policy_issue": "security_review_required",
+            "other_or_unknown": "manual_triage_required",
+        }
+        for root_cause, expected_status in expected.items():
+            with self.subTest(root_cause=root_cause):
+                request = _frontend_request("sanitized test evidence")
+                classification = {
+                    "final_root_cause": root_cause,
+                    "final_confidence_percentage": 84.0,
+                    "ml_confidence_percentage": 84.0,
+                    "ml_prediction": root_cause,
+                    "decision_source": "machine_learning",
+                    "probabilities": {root_cause: 84.0},
+                    "detected_error": {
+                        "error_type": "BuildError",
+                        "error_message": "sanitized failure",
+                        "failed_file": "unknown",
+                        "failed_line": "unknown",
+                    },
+                    "model_input_sha256": "e" * 64,
+                }
+                database = FakeDatabase()
+                with patch(
+                    "app.routers.analyze.root_cause_service.analyze",
+                    return_value=classification,
+                ):
+                    result = await analyze_failure(request, database)
+
+                attempt = next(
+                    item
+                    for item in database.added
+                    if isinstance(item, RepairAttempt)
+                )
+                action = next(
+                    item
+                    for item in database.added
+                    if isinstance(item, RootCauseActionAudit)
+                )
+                self.assertEqual(attempt.status, expected_status)
+                self.assertFalse(attempt.eligible)
+                self.assertFalse(attempt.github_changes_made)
+                self.assertIsNone(attempt.repair_plan)
+                self.assertEqual(action.history_status, expected_status)
+                self.assertFalse(action.github_changes_made)
+                self.assertEqual(
+                    result["pipeline"]["notification"]["status"],
+                    expected_status,
+                )
+                safe_result = str(result["pipeline"]["notification"])
+                self.assertNotIn("sanitized test evidence", safe_result)
+                self.assertNotIn("token", safe_result.lower())
 
 
 if __name__ == "__main__":

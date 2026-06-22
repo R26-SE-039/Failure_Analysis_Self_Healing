@@ -21,6 +21,10 @@ const item = {
   publish_status: "draft_pr_created",
   action_status: null,
   target_module: null,
+  automation_level: "controlled_draft_pr",
+  recommended_action: "Start a controlled read-only repair plan.",
+  validation_guidance: [],
+  history_status: "planned",
   repair_branch: "auto-heal/repair-test-syntaxerror",
   commit_sha: "b".repeat(40),
   draft_pr_url: "https://github.com/example/project/pull/1",
@@ -58,6 +62,10 @@ test("renders notification-only test script history", () => {
     publish_status: null,
     action_status: "notification_sent",
     target_module: "Test Script Generation Module",
+    automation_level: "notification_only",
+    recommended_action: "Forward this failure for test regeneration.",
+    validation_guidance: [],
+    history_status: "notification_sent",
     repair_branch: null,
     commit_sha: null,
     draft_pr_url: null,
@@ -70,5 +78,33 @@ test("renders notification-only test script history", () => {
   assert.match(markup, /notification sent/);
   assert.match(markup, /Test Script Generation Module/);
   assert.match(markup, /No GitHub changes/);
+  assert.doesNotMatch(markup, /Repair branch|Draft PR/);
+});
+
+test("renders safe diagnostic guidance for remaining root causes", () => {
+  const dependencyItem = {
+    ...item,
+    root_cause: "dependency_issue",
+    automation_level: "diagnostic_only",
+    recommended_action: "Review missing dependency or lockfile mismatch.",
+    validation_guidance: ["npm install", "npm test"],
+    history_status: "dependency_review_required",
+    publish_status: null,
+    action_status: "dependency_review_required",
+    target_module: "Dependency / Build Owner",
+    repair_branch: null,
+    commit_sha: null,
+    draft_pr_url: null,
+    github_changes_made: false,
+  };
+  const markup = renderToStaticMarkup(
+    React.createElement(RepairHistoryTable, { items: [dependencyItem] }),
+  );
+
+  assert.match(markup, /diagnostic only/);
+  assert.match(markup, /Review missing dependency/);
+  assert.match(markup, /dependency review required/);
+  assert.match(markup, /Dependency \/ Build Owner/);
+  assert.match(markup, /npm install/);
   assert.doesNotMatch(markup, /Repair branch|Draft PR/);
 });
