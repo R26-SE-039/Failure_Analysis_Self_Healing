@@ -9,7 +9,7 @@ rendered in GitHub, Mermaid Live Editor, or VS Code with a Mermaid extension.
 flowchart TB
     User[Developer / QA User]
 
-    subgraph Frontend[Next.js Frontend]
+    subgraph Frontend[Vite React Frontend - separate repository]
         Submit[Submit Failure Page]
         Results[Analysis and Action Results]
         History[Repair History / Audit Page]
@@ -344,3 +344,4 @@ flowchart LR
   recommendation, or manual-triage audit records with `github_changes_made=false`.
 - Repair History is a safe projection and excludes logs, source code, repair-plan
   JSON, prompts, secrets, tokens, and raw MCP/OpenRouter responses.
+
