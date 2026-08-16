@@ -11,6 +11,7 @@ from app.models.test_script_notification_audit import (
 )
 from app.models.root_cause_action_audit import RootCauseActionAudit
 from app.routers.analyze import analyze_failure
+from app.services.project_configuration_client import ProjectGitHubConfiguration
 from tests.test_classifier_regression import _frontend_request
 
 
@@ -59,17 +60,39 @@ class AnalysisRepairIntegrationTests(
         }
         database = FakeDatabase()
 
+        github_config = ProjectGitHubConfiguration(
+            repository_url="https://github.com/example/demo",
+            repository_owner="example",
+            repository_name="demo",
+            repository_full_name="example/demo",
+            token="test-project-token",
+        )
+        get_config = AsyncMock(return_value=github_config)
+
         with (
             patch.dict(
                 os.environ,
-                {"GITHUB_ALLOWED_REPOSITORIES": "example/demo"},
+                {"GITHUB_ALLOWED_REPOSITORIES": ""},
             ),
             patch(
-                "app.routers.analyze.github_actions_service.resolve_run",
+                "app.routers.analyze.project_configuration_client.get_project_github_configuration",
+                new=get_config,
+            ),
+            patch(
+                "app.routers.analyze.GitHubActionsService.resolve_run",
                 new=AsyncMock(return_value=source_run),
             ),
         ):
-            result = await analyze_failure(request, database)
+            result = await analyze_failure(
+                request,
+                database,
+                authorization="Bearer user-token",
+            )
+
+        get_config.assert_awaited_once_with(
+            project_id=str(request.project_id),
+            authorization_header="Bearer user-token",
+        )
 
         self.assertEqual(
             result["pipeline"]["classification"]["root_cause"],
@@ -138,9 +161,20 @@ class AnalysisRepairIntegrationTests(
         }
         database = FakeDatabase()
 
+        github_config = ProjectGitHubConfiguration(
+            repository_url="https://github.com/example/demo",
+            repository_owner="example",
+            repository_name="demo",
+            repository_full_name="example/demo",
+            token="test-project-token",
+        )
         with (
             patch(
-                "app.routers.analyze.github_actions_service.resolve_run",
+                "app.routers.analyze.project_configuration_client.get_project_github_configuration",
+                new=AsyncMock(return_value=github_config),
+            ),
+            patch(
+                "app.routers.analyze.GitHubActionsService.resolve_run",
                 new=AsyncMock(return_value=source_run),
             ),
             patch(
@@ -148,7 +182,11 @@ class AnalysisRepairIntegrationTests(
                 return_value=classification,
             ),
         ):
-            result = await analyze_failure(request, database)
+            result = await analyze_failure(
+                request,
+                database,
+                authorization="Bearer user-token",
+            )
 
         attempt = next(
             item for item in database.added if isinstance(item, RepairAttempt)

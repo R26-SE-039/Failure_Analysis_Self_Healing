@@ -9,7 +9,7 @@ GET  /analyze/retrain/status — Retraining status
 import uuid
 from typing import Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -24,8 +24,12 @@ from app.core import flaky_detector as analytics
 from app.core import notifier
 from app.services.github_actions_service import (
     GitHubActionsApiError,
+    GitHubActionsService,
     GitHubRunUrlError,
-    github_actions_service,
+)
+from app.services.project_configuration_client import (
+    ProjectConfigurationError,
+    project_configuration_client,
 )
 from app.services.healing_orchestrator import healing_orchestrator
 from app.services.repair_evidence_service import (
@@ -151,15 +155,33 @@ def _classification_from_root_cause(result: dict) -> dict:
 
 # ── Full pipeline endpoint ─────────────────────────────────────────────────────
 @router.post("/")
-async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
+async def analyze_failure(
+    req: AnalyzeRequest,
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+):
     test_id = f"TEST-{uuid.uuid4().hex[:8].upper()}"
 
     source_run = None
+    project_repair_repositories: set[str] | None = None
     if req.github_actions_run_url:
         try:
-            source_run = await github_actions_service.resolve_run(
-                req.github_actions_run_url
+            github_config = await project_configuration_client.get_project_github_configuration(
+                project_id=str(req.project_id),
+                authorization_header=authorization,
             )
+            project_repair_repositories = {
+                github_config.repository_full_name
+            }
+            source_run = await GitHubActionsService(
+                token=github_config.token,
+                allowed_repositories=project_repair_repositories,
+            ).resolve_run(req.github_actions_run_url)
+        except ProjectConfigurationError as error:
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
         except GitHubRunUrlError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except GitHubActionsApiError as error:
@@ -256,7 +278,9 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         raw_log,
         root_cause_result.get("detected_error", {}),
     )
-    eligibility = RepairEligibilityService().evaluate(
+    eligibility = RepairEligibilityService(
+        allowed_repositories=project_repair_repositories,
+    ).evaluate(
         classification=ml_result,
         healing_plan=healing_plan,
         source_run=source_run,

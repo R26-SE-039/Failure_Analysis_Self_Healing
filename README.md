@@ -207,12 +207,13 @@ pnpm dev
 | `DATABASE_MODE` | Database selection mode: `neon`, `local`, or `auto` | `local` |
 | `DATABASE_URL` | Neon PostgreSQL connection string. Keep SSL settings in the URL when required. | Required for `neon`; optional for `auto` |
 | `LOCAL_DATABASE_URL` | Local SQLite SQLAlchemy URL used for local mode and auto fallback | `sqlite:///./app.db` |
-| `GITHUB_PAT_TOKEN` | Fine-grained PAT used server-side to read workflow-run metadata | Optional for public repositories |
+| `API_GATEWAY_URL` | API Gateway base URL used by Component 3 to load the selected project Git configuration with the user JWT | Required for user-triggered GitHub Actions analysis |
+| `GITHUB_ALLOWED_REPOSITORIES` | Optional defense-in-depth allowlist for controlled repair/publish repositories | Optional |
 | `REPAIR_AGENT_URL` | Repair-agent base URL used by backend repair client | `http://127.0.0.1:8010` |
 
 `DATABASE_MODE=neon` fails startup if Neon cannot be reached. `DATABASE_MODE=local` uses the local SQLite database. `DATABASE_MODE=auto` tries Neon once during startup and falls back to SQLite only if the initial Neon connection fails. The selected database does not change during normal API requests.
 
-For private repositories, grant the fine-grained token repository access plus `Actions: Read-only` and `Metadata: Read-only`. Keep all tokens in `backend/.env`, the repair-agent environment, or the backend process environment. Never send tokens from the frontend.
+For private repositories, configure the repository URL and PAT on the Project Details -> Git Configuration screen. Component 3 reuses the logged-in user JWT to load that project configuration through the API Gateway for user-triggered GitHub Actions analysis. The PAT is kept in backend memory only for the GitHub request and is not stored by Component 3. Unattended/background jobs without a user JWT require a future server-to-server credential contract from auth-service.
 
 ### Separate Frontend (`../failure-analysis-self-healing-frontend/.env`)
 

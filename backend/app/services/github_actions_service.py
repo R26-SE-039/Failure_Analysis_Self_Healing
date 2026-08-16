@@ -109,11 +109,7 @@ class GitHubActionsService:
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
             "User-Agent": "failure-analysis-self-healing",
         }
-        token = (
-            self._token
-            or os.getenv("GITHUB_ACTIONS_TOKEN")
-            or os.getenv("GITHUB_PAT_TOKEN")
-        )
+        token = self._token
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
@@ -154,7 +150,7 @@ class GitHubActionsService:
 
         if response.status_code == 401:
             raise GitHubActionsApiError(
-                "GitHub rejected the token. Check GITHUB_PAT_TOKEN."
+                "GitHub rejected the project GitHub token. Update the project Git configuration."
             )
         if response.status_code == 403:
             raise GitHubActionsApiError(

@@ -45,6 +45,36 @@ class RepairEligibilityTests(unittest.TestCase):
         )
         self.assertTrue(result.eligible)
 
+
+    def test_allows_project_configured_repository_without_env_allowlist(self):
+        service = RepairEligibilityService({"example/project"})
+
+        result = service.evaluate(
+            classification=classification(),
+            healing_plan=healing_plan(),
+            source_run=source_run(),
+            candidate_file="app/user_service.py",
+            candidate_line=10,
+        )
+
+        self.assertTrue(result.eligible)
+
+    def test_non_application_defect_remains_blocked_even_when_repo_matches(self):
+        service = RepairEligibilityService({"example/project"})
+        cls = classification()
+        cls["root_cause"] = "dependency_issue"
+
+        result = service.evaluate(
+            classification=cls,
+            healing_plan=healing_plan(),
+            source_run=source_run(),
+            candidate_file="app/user_service.py",
+            candidate_line=10,
+        )
+
+        self.assertFalse(result.eligible)
+        self.assertEqual(result.code, "wrong_root_cause")
+
     def test_rejects_missing_metadata_and_protected_path(self):
         missing = self.service.evaluate(
             classification=classification(),

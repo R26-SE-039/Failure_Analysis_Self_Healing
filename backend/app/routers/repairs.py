@@ -570,8 +570,9 @@ async def publish_approved_repair(
     try:
         publish_request, safety_checks = prepare_publish_request(
             attempt,
-            allowed_repositories_value=os.getenv(
-                "GITHUB_ALLOWED_REPOSITORIES"
+            allowed_repositories_value=(
+                os.getenv("GITHUB_ALLOWED_REPOSITORIES")
+                or repository
             ),
             max_files=int(os.getenv("REPAIR_MAX_FILES", "4")),
             recovery_only=recovery_audit,
