@@ -30,7 +30,7 @@ NEXTGEN QA is a research-grade intelligent QA platform designed to reduce manual
 4. **Routing smart alerts** to the right stakeholder based on failure root cause.
 5. **Powering dashboard views** through API endpoints consumed by the separate frontend repository.
 
-The analysis pipeline runs through the FastAPI backend, persists results to PostgreSQL, and delegates controlled repair planning/publishing to the repair-agent service.
+The analysis pipeline runs through the FastAPI backend, persists results to the configured backend database, and delegates controlled repair planning/publishing to the repair-agent service. Neon PostgreSQL can be used as the hosted primary database, while the existing local SQLite database remains available for local development and fallback startup mode.
 
 ---
 
@@ -153,7 +153,7 @@ That project is a Vite React TypeScript app and should call this backend at `htt
 ### Prerequisites
 
 - Python 3.11+
-- PostgreSQL, or a configured `DATABASE_URL`
+- Neon PostgreSQL for hosted persistence, or local SQLite through `LOCAL_DATABASE_URL`
 - Node.js 20+ only when running the separate frontend repository
 
 ### 1. Train or Verify the Model
@@ -204,9 +204,13 @@ pnpm dev
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | Project/local default |
+| `DATABASE_MODE` | Database selection mode: `neon`, `local`, or `auto` | `local` |
+| `DATABASE_URL` | Neon PostgreSQL connection string. Keep SSL settings in the URL when required. | Required for `neon`; optional for `auto` |
+| `LOCAL_DATABASE_URL` | Local SQLite SQLAlchemy URL used for local mode and auto fallback | `sqlite:///./app.db` |
 | `GITHUB_PAT_TOKEN` | Fine-grained PAT used server-side to read workflow-run metadata | Optional for public repositories |
 | `REPAIR_AGENT_URL` | Repair-agent base URL used by backend repair client | `http://127.0.0.1:8010` |
+
+`DATABASE_MODE=neon` fails startup if Neon cannot be reached. `DATABASE_MODE=local` uses the local SQLite database. `DATABASE_MODE=auto` tries Neon once during startup and falls back to SQLite only if the initial Neon connection fails. The selected database does not change during normal API requests.
 
 For private repositories, grant the fine-grained token repository access plus `Actions: Read-only` and `Metadata: Read-only`. Keep all tokens in `backend/.env`, the repair-agent environment, or the backend process environment. Never send tokens from the frontend.
 

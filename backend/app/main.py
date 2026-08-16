@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from app.database import Base, engine
 
@@ -34,25 +34,36 @@ Base.metadata.create_all(bind=engine)
 
 # ── Safe database migration ───────────────────────────────────────────────────
 def _run_migrations() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("failures"):
+        return
+
+    columns = {
+        column["name"] for column in inspector.get_columns("failures")
+    }
+    if "created_at" in columns:
+        return
+
+    if engine.dialect.name == "postgresql":
+        statement = """
+            ALTER TABLE failures
+            ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()
+        """
+    elif engine.dialect.name == "sqlite":
+        statement = """
+            ALTER TABLE failures
+            ADD COLUMN created_at DATETIME
+        """
+    else:
+        statement = """
+            ALTER TABLE failures
+            ADD COLUMN created_at DATETIME
+        """
+
     with engine.connect() as conn:
-        try:
-            conn.execute(
-                text(
-                    """
-                    ALTER TABLE failures
-                    ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()
-                    """
-                )
-            )
-            conn.commit()
-            print(
-                "[Migration] Added created_at column "
-                "to failures table."
-            )
-        except Exception:
-            # The column probably already exists.
-            # This is expected after the first successful migration.
-            pass
+        conn.execute(text(statement))
+        conn.commit()
+        print("[Migration] Added created_at column to failures table.")
 
 
 _run_migrations()
