@@ -2,6 +2,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    ForeignKey,
     Integer,
     JSON,
     String,
@@ -16,6 +17,12 @@ class RepairPublishAudit(Base):
     __tablename__ = "repair_publish_audits"
 
     id = Column(Integer, primary_key=True, index=True)
+    repair_attempt_id = Column(
+        Integer,
+        ForeignKey("repair_attempts.id"),
+        nullable=True,
+        index=True,
+    )
     attempt_id = Column(
         String,
         unique=True,

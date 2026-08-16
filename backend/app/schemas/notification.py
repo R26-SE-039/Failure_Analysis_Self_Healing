@@ -1,7 +1,10 @@
+from typing import Optional
+
 from pydantic import BaseModel
 
 
 class NotificationBase(BaseModel):
+    failure_id: Optional[int] = None
     failure_test_id: str
     test_name: str
     root_cause: str
@@ -23,4 +26,4 @@ class PaginatedNotificationResponse(BaseModel):
     data: list[NotificationResponse]
     total: int
     page: int
-    limit: int
+    limit: int

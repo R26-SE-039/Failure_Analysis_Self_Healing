@@ -8,6 +8,7 @@ GET  /analyze/retrain/status — Retraining status
 """
 import uuid
 from typing import Optional
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -54,6 +55,13 @@ ROOT_CAUSE_MODEL_NAME = "best_9class_root_cause_model.joblib"
 
 # ── Request schema for the analyze endpoint ────────────────────────────────────
 class AnalyzeRequest(BaseModel):
+    organization_id: UUID
+    project_id: UUID
+    iteration_id: Optional[UUID] = None
+    user_story_id: Optional[UUID] = None
+    suite_id: Optional[UUID] = None
+    execution_id: Optional[UUID] = None
+    test_run_id: Optional[UUID] = None
     test_name: str
     pipeline: str
     error_message: str
@@ -426,6 +434,13 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
     # ── Step 5: Persist to DB ──────────────────────────────────────────────────
     failure_record = Failure(
+        organization_id  = req.organization_id,
+        project_id       = req.project_id,
+        iteration_id     = req.iteration_id,
+        user_story_id    = req.user_story_id,
+        suite_id         = req.suite_id,
+        execution_id     = req.execution_id,
+        test_run_id      = req.test_run_id,
         test_id          = test_id,
         test_name        = req.test_name,
         pipeline         = req.pipeline,
@@ -443,8 +458,12 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         developer_alert  = developer_alert,
     )
     db.add(failure_record)
+    if hasattr(db, "flush"):
+        db.flush()
+    failure_id = getattr(failure_record, "id", None)
 
     healing_record = HealingAction(
+        failure_id       = failure_id,
         healing_id       = heal_result.get("healing_id", f"H-{uuid.uuid4().hex[:6].upper()}"),
         failure_test_id  = test_id,
         test_name        = req.test_name,
@@ -456,7 +475,15 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     db.add(healing_record)
 
     if repair_attempt:
+        repair_attempt.failure_id = failure_id
         db.add(repair_attempt)
+        if hasattr(db, "flush"):
+            db.flush()
+        repair_attempt_id = getattr(repair_attempt, "id", None)
+        if notification_audit:
+            notification_audit.repair_attempt_id = repair_attempt_id
+        if action_audit:
+            action_audit.repair_attempt_id = repair_attempt_id
     if notification_audit:
         db.add(notification_audit)
     if action_audit:
@@ -464,6 +491,10 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
 
     if flaky_result.get("is_flaky"):
         flaky_record = FlakyTest(
+            organization_id   = req.organization_id,
+            project_id        = req.project_id,
+            suite_id          = req.suite_id,
+            latest_test_run_id = req.test_run_id,
             test_code        = test_id,
             test_name        = req.test_name,
             instability_score = flaky_result.get("instability_score", "0%"),
@@ -477,6 +508,7 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         and notification_result.get("status") == "sent"
     ):
         notif_record = Notification(
+            failure_id       = failure_id,
             failure_test_id = test_id,
             test_name       = req.test_name,
             root_cause      = root_cause,

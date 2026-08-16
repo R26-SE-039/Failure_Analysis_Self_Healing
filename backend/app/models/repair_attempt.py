@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     JSON,
     String,
@@ -18,6 +19,7 @@ class RepairAttempt(Base):
     __tablename__ = "repair_attempts"
 
     id = Column(Integer, primary_key=True, index=True)
+    failure_id = Column(Integer, ForeignKey("failures.id"), nullable=True, index=True)
     attempt_id = Column(
         String,
         unique=True,

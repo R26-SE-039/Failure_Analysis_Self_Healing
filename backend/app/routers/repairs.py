@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.models.failure import Failure
 from app.models.repair_attempt import RepairAttempt
 from app.models.repair_publish_audit import RepairPublishAudit
 from app.models.test_script_notification_audit import (
@@ -41,6 +42,11 @@ from app.services.repair_eligibility_service import (
     is_protected_path,
 )
 from app.services.secret_redaction import contains_secret
+from app.services.project_scope import (
+    ProjectScope,
+    apply_repair_attempt_scope,
+    get_project_scope,
+)
 
 
 router = APIRouter(
@@ -72,11 +78,28 @@ def _repository_name(attempt: RepairAttempt) -> Optional[str]:
     return f"{attempt.repository_owner}/{attempt.repository_name}".lower()
 
 
+def _repair_attempt_query(
+    db: Session,
+    attempt_id: str,
+    scope: ProjectScope,
+    *,
+    for_update: bool = False,
+):
+    query = db.query(RepairAttempt).filter(
+        RepairAttempt.attempt_id == attempt_id
+    )
+    query = apply_repair_attempt_scope(query, RepairAttempt, Failure, scope)
+    if for_update and hasattr(query, "with_for_update"):
+        query = query.with_for_update()
+    return query
+
+
 @router.get("/history", response_model=list[RepairHistoryItem])
 def get_repair_history(
     root_cause: Optional[str] = None,
     publish_status: Optional[str] = None,
     repository: Optional[str] = None,
+    scope: ProjectScope = Depends(get_project_scope),
     db: Session = Depends(get_db),
 ):
     rows = (
@@ -98,9 +121,13 @@ def get_repair_history(
             RootCauseActionAudit,
             RootCauseActionAudit.attempt_id == RepairAttempt.attempt_id,
         )
-        .order_by(RepairAttempt.created_at.desc())
-        .all()
     )
+    rows = apply_repair_attempt_scope(
+        rows,
+        RepairAttempt,
+        Failure,
+        scope,
+    ).order_by(RepairAttempt.created_at.desc()).all()
     repository_filter = repository.strip().lower() if repository else None
     history: list[RepairHistoryItem] = []
     for attempt, audit, notification_audit, action_audit in rows:
@@ -271,13 +298,10 @@ def _validated_plan(
 @router.get("/{attempt_id}")
 def get_repair_attempt(
     attempt_id: str,
+    scope: ProjectScope = Depends(get_project_scope),
     db: Session = Depends(get_db),
 ):
-    attempt = (
-        db.query(RepairAttempt)
-        .filter(RepairAttempt.attempt_id == attempt_id)
-        .first()
-    )
+    attempt = _repair_attempt_query(db, attempt_id, scope).first()
     if not attempt:
         raise HTTPException(
             status_code=404,
@@ -323,6 +347,7 @@ def get_repair_attempt(
 async def create_read_only_plan(
     attempt_id: str,
     confirmation: RepairConfirmationRequest,
+    scope: ProjectScope = Depends(get_project_scope),
     db: Session = Depends(get_db),
 ):
     if confirmation.confirm_read_only is not True:
@@ -331,11 +356,7 @@ async def create_read_only_plan(
             detail="Explicit read-only confirmation is required.",
         )
 
-    attempt = (
-        db.query(RepairAttempt)
-        .filter(RepairAttempt.attempt_id == attempt_id)
-        .first()
-    )
+    attempt = _repair_attempt_query(db, attempt_id, scope).first()
     if not attempt:
         raise HTTPException(
             status_code=404,
@@ -477,6 +498,7 @@ async def create_read_only_plan(
 async def publish_approved_repair(
     attempt_id: str,
     confirmation: PublishConfirmationRequest,
+    scope: ProjectScope = Depends(get_project_scope),
     db: Session = Depends(get_db),
 ):
     if confirmation.confirm_publish is not True:
@@ -485,12 +507,12 @@ async def publish_approved_repair(
             detail="Explicit publish confirmation is required.",
         )
 
-    attempt_query = db.query(RepairAttempt).filter(
-        RepairAttempt.attempt_id == attempt_id
-    )
-    if hasattr(attempt_query, "with_for_update"):
-        attempt_query = attempt_query.with_for_update()
-    attempt = attempt_query.first()
+    attempt = _repair_attempt_query(
+        db,
+        attempt_id,
+        scope,
+        for_update=True,
+    ).first()
     if not attempt:
         raise HTTPException(status_code=404, detail="Repair attempt not found.")
 
@@ -556,6 +578,7 @@ async def publish_approved_repair(
         )
     except PublishSafetyError as error:
         audit = existing or RepairPublishAudit(
+            repair_attempt_id=getattr(attempt, "id", None),
             attempt_id=attempt.attempt_id,
             repository=repository,
             base_sha=attempt.head_sha or "unknown",
@@ -582,6 +605,7 @@ async def publish_approved_repair(
         {change.file_path for change in publish_request.proposed_changes}
     )
     audit = existing or RepairPublishAudit(
+        repair_attempt_id=getattr(attempt, "id", None),
         attempt_id=attempt.attempt_id,
         repository=repository,
         base_sha=publish_request.base_sha,

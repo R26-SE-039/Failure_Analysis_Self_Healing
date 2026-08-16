@@ -33,7 +33,66 @@ Base.metadata.create_all(bind=engine)
 
 
 # ── Safe database migration ───────────────────────────────────────────────────
+def _uuid_column_type() -> str:
+    return "UUID" if engine.dialect.name == "postgresql" else "CHAR(36)"
+
+
+def _add_column_if_missing(
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table(table_name):
+        return
+    columns = {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+    if column_name in columns:
+        return
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                f"ALTER TABLE {table_name} "
+                f"ADD COLUMN {column_name} {column_type}"
+            )
+        )
+        conn.commit()
+        print(f"[Migration] Added {column_name} column to {table_name}.")
+
+
 def _run_migrations() -> None:
+    uuid_type = _uuid_column_type()
+
+    for column_name in (
+        "organization_id",
+        "project_id",
+        "iteration_id",
+        "user_story_id",
+        "suite_id",
+        "execution_id",
+        "test_run_id",
+    ):
+        _add_column_if_missing("failures", column_name, uuid_type)
+
+    for table_name in ("healing_actions", "notifications", "repair_attempts"):
+        _add_column_if_missing(table_name, "failure_id", "INTEGER")
+
+    for table_name in (
+        "repair_publish_audits",
+        "root_cause_action_audits",
+        "test_script_notification_audits",
+    ):
+        _add_column_if_missing(table_name, "repair_attempt_id", "INTEGER")
+
+    for column_name in (
+        "organization_id",
+        "project_id",
+        "suite_id",
+        "latest_test_run_id",
+    ):
+        _add_column_if_missing("flaky_tests", column_name, uuid_type)
+
     inspector = inspect(engine)
     if not inspector.has_table("failures"):
         return

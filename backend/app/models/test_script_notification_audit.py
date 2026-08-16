@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, DateTime, Float, Integer, String, Text
+from sqlalchemy import BigInteger, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.sql import func
 
 from app.database import Base
@@ -8,6 +8,12 @@ class TestScriptNotificationAudit(Base):
     __tablename__ = "test_script_notification_audits"
 
     id = Column(Integer, primary_key=True, index=True)
+    repair_attempt_id = Column(
+        Integer,
+        ForeignKey("repair_attempts.id"),
+        nullable=True,
+        index=True,
+    )
     notification_id = Column(String, unique=True, nullable=False, index=True)
     attempt_id = Column(String, unique=True, nullable=False, index=True)
     root_cause = Column(String, nullable=False)

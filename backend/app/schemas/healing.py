@@ -1,7 +1,10 @@
+from typing import Optional
+
 from pydantic import BaseModel
 
 
 class HealingBase(BaseModel):
+    failure_id: Optional[int] = None
     healing_id: str
     failure_test_id: str
     test_name: str
@@ -25,4 +28,4 @@ class PaginatedHealingResponse(BaseModel):
     data: list[HealingResponse]
     total: int
     page: int
-    limit: int
+    limit: int

@@ -3,6 +3,7 @@ import json
 import re
 import unittest
 from pathlib import Path
+from uuid import UUID
 
 import sklearn
 
@@ -22,6 +23,8 @@ MODEL_PATH = (
     / "models"
     / "best_9class_root_cause_model.joblib"
 )
+TEST_ORGANIZATION_ID = UUID("11111111-1111-1111-1111-111111111111")
+TEST_PROJECT_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
 def _frontend_request(raw_log: str) -> AnalyzeRequest:
@@ -37,6 +40,8 @@ def _frontend_request(raw_log: str) -> AnalyzeRequest:
         if re.search(r"at\s|Exception|Error", line)
     )
     return AnalyzeRequest(
+        organization_id=TEST_ORGANIZATION_ID,
+        project_id=TEST_PROJECT_ID,
         test_name="0_test",
         pipeline="GitHub Actions",
         error_message=error_message,
