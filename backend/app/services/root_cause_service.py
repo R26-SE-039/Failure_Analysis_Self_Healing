@@ -8,6 +8,14 @@ from typing import Any
 import joblib
 
 
+MAVEN_COMPILER_DIAGNOSTIC_PATTERN = re.compile(
+    r"^\s*(?:\d{4}-\d{2}-\d{2}T\S+Z\s+)?(?:\[[A-Z]+\]\s*)?"
+    r"(?P<file>(?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.java):"
+    r"\[(?P<line>\d+),(?P<column>\d+)\]\s*(?P<message>.+?)\s*$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+
+
 class RootCauseService:
     """Analyze GitHub Actions logs using the trained nine-class model."""
 
@@ -81,6 +89,9 @@ class RootCauseService:
         ):
             return "deploy"
 
+        if "stage=compile" in lower_log or MAVEN_COMPILER_DIAGNOSTIC_PATTERN.search(log):
+            return "compile"
+
         if any(
             value in lower_log
             for value in [
@@ -137,6 +148,61 @@ class RootCauseService:
             return "C++"
 
         return "unknown"
+
+    @staticmethod
+    def normalize_failed_source_path(path: str) -> str | None:
+        normalized = path.replace("\\", "/").strip().strip('"').strip("'")
+        if not normalized:
+            return None
+
+        runner_match = re.match(
+            r"^/home/runner/work/(?P<repo>[A-Za-z0-9_.-]+)/(?P=repo)/(?P<relative>.+)$",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not runner_match:
+            runner_match = re.match(
+                r"^[A-Za-z]:/a/(?P<repo>[A-Za-z0-9_.-]+)/(?P=repo)/(?P<relative>.+)$",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+        if runner_match:
+            normalized = runner_match.group("relative")
+
+        if (
+            not normalized
+            or normalized.startswith("/")
+            or normalized.startswith("//")
+            or re.match(r"^[A-Za-z]:/", normalized)
+        ):
+            return None
+
+        parts = normalized.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            return None
+        if not normalized.lower().startswith(("app/", "src/", "test/", "tests/")):
+            return None
+        return normalized
+
+    @staticmethod
+    def find_java_compiler_diagnostic(log: str) -> dict[str, str] | None:
+        for line in log.replace("\\", "/").splitlines():
+            match = MAVEN_COMPILER_DIAGNOSTIC_PATTERN.search(line.strip())
+            if not match:
+                continue
+            failed_file = RootCauseService.normalize_failed_source_path(
+                match.group("file")
+            )
+            failed_line = match.group("line")
+            message = match.group("message").strip()
+            if failed_file and failed_line.isdigit() and int(failed_line) > 0 and message:
+                return {
+                    "error_type": "CompilationError",
+                    "error_message": message,
+                    "failed_file": failed_file,
+                    "failed_line": failed_line,
+                }
+        return None
 
     @staticmethod
     def find_failed_file(
@@ -267,8 +333,13 @@ class RootCauseService:
 
         missing_fixture = None
         missing_module = None
+        java_compiler_diagnostic = self.find_java_compiler_diagnostic(clean_log)
 
-        if missing_fixture_match:
+        if java_compiler_diagnostic:
+            error_type = java_compiler_diagnostic["error_type"]
+            error_message = java_compiler_diagnostic["error_message"]
+
+        elif missing_fixture_match:
             missing_fixture = missing_fixture_match.group(1)
 
             error_type = "FixtureError"
@@ -412,10 +483,14 @@ class RootCauseService:
 
                     break
 
-        failed_file, failed_line = self.find_failed_file(
-            clean_log,
-            error_type,
-        )
+        if java_compiler_diagnostic:
+            failed_file = java_compiler_diagnostic["failed_file"]
+            failed_line = java_compiler_diagnostic["failed_line"]
+        else:
+            failed_file, failed_line = self.find_failed_file(
+                clean_log,
+                error_type,
+            )
 
         # Local package exists in the repository but cannot be imported
         # by GitHub Actions, so the workflow environment is the target.

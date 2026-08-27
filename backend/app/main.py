@@ -22,6 +22,7 @@ from app.routers.notifications import router as notifications_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.analyze import router as analyze_router
 from app.routers.repairs import router as repairs_router
+from app.routers.github_actions import router as github_actions_router
 
 # New nine-class root-cause router
 from app.routers.root_cause import router as root_cause_router
@@ -179,6 +180,7 @@ app.include_router(notifications_router)
 app.include_router(dashboard_router)
 app.include_router(analyze_router)
 app.include_router(repairs_router)
+app.include_router(github_actions_router)
 
 
 # ── New nine-class root-cause analysis router ─────────────────────────────────
@@ -194,3 +196,5 @@ def root():
         "root_cause_endpoint": "/api/root-cause/analyze",
         "documentation": "/docs",
     }
+
+

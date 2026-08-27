@@ -126,5 +126,93 @@ class ClassifierRegressionTests(unittest.TestCase):
         )
 
 
+    def test_java_maven_compiler_diagnostic_is_structured_for_model_input(self):
+        raw_log = (
+            "pipeline=GitHub Actions\n"
+            "stage=compile\n"
+            "failure_type=GitHub Actions Job Failure\n"
+            "[INFO] Downloading from central: "
+            "https://repo.maven.apache.org/maven2/com/google/guava/failureaccess/1.0.2/failureaccess-1.0.2.pom\n"
+            "[ERROR] /home/runner/work/saucedemo/saucedemo/src/main/java/saucedemo/selenium/pages/CheckoutCompletePage.java:[27,17] '(' expected\n"
+            "[ERROR] BUILD FAILURE\n"
+        )
+
+        details = root_cause_service.extract_error_details(raw_log)
+        model_input = root_cause_service.build_model_input(details)
+
+        self.assertEqual(details["error_type"], "CompilationError")
+        self.assertEqual(details["error_message"], "'(' expected")
+        self.assertEqual(
+            details["failed_file"],
+            "src/main/java/saucedemo/selenium/pages/CheckoutCompletePage.java",
+        )
+        self.assertEqual(details["failed_line"], "27")
+        self.assertEqual(details["stage"], "compile")
+        self.assertEqual(details["language"], "Java")
+        self.assertIn("error_type=CompilationError", model_input)
+        self.assertIn("failed_file=src/main/java/saucedemo/selenium/pages/CheckoutCompletePage.java", model_input)
+
+    def test_timestamped_java_maven_compiler_diagnostic_is_structured(self):
+        raw_log = (
+            "2026-08-27T08:30:40.1000000Z [INFO] Downloading from central: "
+            "https://repo.maven.apache.org/maven2/com/google/guava/failureaccess/1.0.2/failureaccess-1.0.2.pom\n"
+            "2026-08-27T08:30:49.1234567Z [ERROR] "
+            "/home/runner/work/saucedemo/saucedemo/src/main/java/saucedemo/selenium/pages/CheckoutCompletePage.java:"
+            "[27,17] '(' expected\n"
+        )
+
+        details = root_cause_service.extract_error_details(raw_log)
+
+        self.assertEqual(details["error_type"], "CompilationError")
+        self.assertEqual(details["error_message"], "'(' expected")
+        self.assertEqual(
+            details["failed_file"],
+            "src/main/java/saucedemo/selenium/pages/CheckoutCompletePage.java",
+        )
+        self.assertEqual(details["failed_line"], "27")
+        self.assertEqual(details["stage"], "compile")
+
+    def test_maven_dependency_resolution_is_not_mislabeled_as_compilation_error(self):
+        raw_log = (
+            "[INFO] Downloading from central: "
+            "https://repo.maven.apache.org/maven2/com/google/guava/failureaccess/1.0.2/failureaccess-1.0.2.pom\n"
+            "[ERROR] Failed to execute goal on project demo: Could not resolve artifact org.example:missing:jar:1.0.0\n"
+            "DependencyResolutionException: Failed to collect dependencies\n"
+        )
+
+        details = root_cause_service.extract_error_details(raw_log)
+
+        self.assertNotEqual(details["error_type"], "CompilationError")
+        self.assertEqual(details["failed_file"], "unknown")
+        self.assertEqual(details["failed_line"], "unknown")
+
+    def test_python_syntax_error_detection_remains_unchanged(self):
+        details = root_cause_service.extract_error_details(
+            _build_log_text(_frontend_request(self.raw_log))
+        )
+
+        self.assertEqual(
+            details["error_type"],
+            self.contract["detected_error"]["error_type"],
+        )
+        self.assertEqual(
+            details["failed_file"],
+            self.contract["detected_error"]["failed_file"],
+        )
+        self.assertEqual(
+            details["failed_line"],
+            self.contract["detected_error"]["failed_line"],
+        )
+
+    def test_model_artifact_hash_remains_unchanged(self):
+        model_hash = hashlib.sha256(
+            MODEL_PATH.read_bytes()
+        ).hexdigest().upper()
+
+        self.assertEqual(
+            model_hash,
+            self.contract["model_artifact_sha256"],
+        )
+
 if __name__ == "__main__":
     unittest.main()

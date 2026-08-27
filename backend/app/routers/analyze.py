@@ -33,6 +33,7 @@ from app.services.project_configuration_client import (
 )
 from app.services.healing_orchestrator import healing_orchestrator
 from app.services.repair_evidence_service import (
+    RepairEvidence,
     repair_evidence_service,
 )
 from app.services.repair_eligibility_service import (
@@ -154,17 +155,19 @@ def _classification_from_root_cause(result: dict) -> dict:
 
 
 # ── Full pipeline endpoint ─────────────────────────────────────────────────────
-@router.post("/")
-async def analyze_failure(
+async def run_analysis_pipeline(
     req: AnalyzeRequest,
-    db: Session = Depends(get_db),
-    authorization: Optional[str] = Header(default=None),
+    db: Session,
+    authorization: Optional[str] = None,
+    source_run_override: Optional[dict] = None,
+    project_repair_repositories_override: Optional[set[str]] = None,
+    repair_evidence_override: Optional[RepairEvidence] = None,
 ):
     test_id = f"TEST-{uuid.uuid4().hex[:8].upper()}"
 
-    source_run = None
-    project_repair_repositories: set[str] | None = None
-    if req.github_actions_run_url:
+    source_run = source_run_override
+    project_repair_repositories: set[str] | None = project_repair_repositories_override
+    if req.github_actions_run_url and source_run is None:
         try:
             github_config = await project_configuration_client.get_project_github_configuration(
                 project_id=str(req.project_id),
@@ -274,7 +277,7 @@ async def analyze_failure(
         }
 
     raw_log = req.logs or req.error_message or ""
-    evidence = repair_evidence_service.extract(
+    evidence = repair_evidence_override or repair_evidence_service.extract(
         raw_log,
         root_cause_result.get("detected_error", {}),
     )
@@ -583,6 +586,19 @@ async def analyze_failure(
         "saved_to_db": True,
     }
 
+
+# Full pipeline endpoint
+@router.post("/")
+async def analyze_failure(
+    req: AnalyzeRequest,
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+):
+    return await run_analysis_pipeline(
+        req=req,
+        db=db,
+        authorization=authorization,
+    )
 
 # ── Local Metrics Endpoints ───────────────────────────────────────────────────
 @router.get("/health")
