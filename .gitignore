@@ -30,3 +30,10 @@ htmlcov/
 
 # Datasets / Large files (Optional, uncomment if you don't want datasets in git)
 # research/data/*.csv
+repair-agent/.env
+repair-agent/.venv/
+repair-agent/workspaces/
+repair-agent/legacy/**/__pycache__/
+
+# Local patch-helper scratch file (safe to delete after the editor releases it)
+backend/app/services/_patch_probe.txt

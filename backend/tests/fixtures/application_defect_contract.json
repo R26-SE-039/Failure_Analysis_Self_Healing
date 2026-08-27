@@ -1,0 +1,25 @@
+{
+  "fixture_sha256": "C926F22B3DA69E4CFBF37897A8C43D7DFB5ADFE7C11D2DA5870774F885F6896F",
+  "model_artifact_sha256": "44FBA9E47EBCE3D7479108E19C5817CE1176BCD6BEE1C79FBEB6AADD8B0E2436",
+  "model_input_sha256": "869B9E2AE7E09ADECD48B9043D9942A7F6FC91557FF95C6CB9ADBDA6FC222D4B",
+  "sklearn_version": "1.6.1",
+  "predicted_class": "application_defect",
+  "confidence": 0.811086427989913,
+  "confidence_absolute_tolerance": 0.01,
+  "class_order": [
+    "application_defect",
+    "dependency_issue",
+    "deployment_issue",
+    "infrastructure_resource_issue",
+    "network_issue",
+    "other_or_unknown",
+    "security_policy_issue",
+    "test_script_issue",
+    "workflow_environment_issue"
+  ],
+  "detected_error": {
+    "error_type": "SyntaxError",
+    "failed_file": "app/user_service.py",
+    "failed_line": "10"
+  }
+}

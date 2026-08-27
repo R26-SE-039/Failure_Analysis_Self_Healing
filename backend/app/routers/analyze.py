@@ -8,7 +8,8 @@ GET  /analyze/retrain/status — Retraining status
 """
 import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from uuid import UUID
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,16 +18,55 @@ from app.models.failure import Failure
 from app.models.healing import HealingAction
 from app.models.flaky_test import FlakyTest
 from app.models.notification import Notification
-from app.core import ml_classifier as ml
+from app.models.repair_attempt import RepairAttempt
 from app.core import healing_engine as healer
 from app.core import flaky_detector as analytics
 from app.core import notifier
+from app.services.github_actions_service import (
+    GitHubActionsApiError,
+    GitHubActionsService,
+    GitHubRunUrlError,
+)
+from app.services.project_configuration_client import (
+    ProjectConfigurationError,
+    project_configuration_client,
+)
+from app.services.healing_orchestrator import healing_orchestrator
+from app.services.repair_evidence_service import (
+    RepairEvidence,
+    repair_evidence_service,
+)
+from app.services.repair_eligibility_service import (
+    RepairEligibilityService,
+)
+from app.services.root_cause_service import root_cause_service
+from app.services.secret_redaction import (
+    bounded_sanitized_text,
+    redact_secrets,
+)
+from app.services.test_script_notification_service import (
+    NOTIFICATION_MESSAGE,
+    TARGET_MODULE,
+    test_script_notification_service,
+)
+from app.services.root_cause_action_audit_service import (
+    root_cause_action_audit_service,
+)
 
 router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
+
+ROOT_CAUSE_MODEL_NAME = "best_9class_root_cause_model.joblib"
 
 
 # ── Request schema for the analyze endpoint ────────────────────────────────────
 class AnalyzeRequest(BaseModel):
+    organization_id: UUID
+    project_id: UUID
+    iteration_id: Optional[UUID] = None
+    user_story_id: Optional[UUID] = None
+    suite_id: Optional[UUID] = None
+    execution_id: Optional[UUID] = None
+    test_run_id: Optional[UUID] = None
     test_name: str
     pipeline: str
     error_message: str
@@ -41,29 +81,129 @@ class AnalyzeRequest(BaseModel):
     memory_usage_mb: Optional[float] = 1024
     is_flaky_test: Optional[int] = 0
     old_locator: Optional[str] = ""
+    github_actions_run_url: Optional[str] = None
+
+
+def _build_log_text(req: AnalyzeRequest) -> str:
+    """Create one log-like payload for the nine-class root-cause service."""
+
+    sections = [
+        f"pipeline={req.pipeline}",
+        f"stage={req.failure_stage}",
+        f"severity={req.severity}",
+        f"failure_type={req.failure_type}",
+        f"retry_count={req.retry_count}",
+        f"test_duration_sec={req.test_duration_sec}",
+        "",
+        "ERROR MESSAGE:",
+        req.error_message or "",
+        "",
+        "STACK TRACE:",
+        req.stack_trace or "",
+        "",
+        "FULL LOGS:",
+        req.logs or "",
+    ]
+
+    return "\n".join(sections)
+
+
+def _classification_from_root_cause(result: dict) -> dict:
+    probabilities = {
+        label: round(float(probability) / 100, 4)
+        for label, probability in result.get("probabilities", {}).items()
+    }
+
+    confidence_percentage = result.get(
+        "final_confidence_percentage",
+        result.get("ml_confidence_percentage", 0),
+    )
+
+    confidence = round(
+        float(confidence_percentage) / 100,
+        4,
+    )
+    ml_confidence = round(
+        float(result.get("ml_confidence_percentage", 0)) / 100,
+        4,
+    )
+
+    detected_error = result.get("detected_error")
+    if isinstance(detected_error, dict):
+        detected_error = {
+            key: (
+                redact_secrets(value)
+                if isinstance(value, str)
+                else value
+            )
+            for key, value in detected_error.items()
+        }
+
+    return {
+        "root_cause": result["final_root_cause"],
+        "confidence": confidence,
+        "ml_prediction": result.get("ml_prediction"),
+        "ml_confidence": ml_confidence,
+        "final_confidence": confidence,
+        "all_probabilities": probabilities,
+        "model_used": ROOT_CAUSE_MODEL_NAME,
+        "decision_source": result.get("decision_source"),
+        "decision_reason": result.get("decision_reason"),
+        "detected_error": detected_error,
+        "model_input_sha256": result.get("model_input_sha256"),
+    }
 
 
 # ── Full pipeline endpoint ─────────────────────────────────────────────────────
-@router.post("/")
-async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
+async def run_analysis_pipeline(
+    req: AnalyzeRequest,
+    db: Session,
+    authorization: Optional[str] = None,
+    source_run_override: Optional[dict] = None,
+    project_repair_repositories_override: Optional[set[str]] = None,
+    repair_evidence_override: Optional[RepairEvidence] = None,
+):
     test_id = f"TEST-{uuid.uuid4().hex[:8].upper()}"
+
+    source_run = source_run_override
+    project_repair_repositories: set[str] | None = project_repair_repositories_override
+    if req.github_actions_run_url and source_run is None:
+        try:
+            github_config = await project_configuration_client.get_project_github_configuration(
+                project_id=str(req.project_id),
+                authorization_header=authorization,
+            )
+            project_repair_repositories = {
+                github_config.repository_full_name
+            }
+            source_run = await GitHubActionsService(
+                token=github_config.token,
+                allowed_repositories=project_repair_repositories,
+            ).resolve_run(req.github_actions_run_url)
+        except ProjectConfigurationError as error:
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=str(error),
+            ) from error
+        except GitHubRunUrlError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except GitHubActionsApiError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     # ── Step 1: ML Classification (Local) ──────────────────────────────────────
     try:
-        ml_result = ml.predict(
-            error_message     = req.error_message,
-            stack_trace       = req.stack_trace or "",
-            failure_stage     = req.failure_stage,
-            failure_type      = req.failure_type,
-            severity          = req.severity,
-            retry_count       = req.retry_count,
-            test_duration_sec = req.test_duration_sec,
-            cpu_usage_pct     = req.cpu_usage_pct,
-            memory_usage_mb   = req.memory_usage_mb,
-            is_flaky_test     = req.is_flaky_test,
+        root_cause_result = root_cause_service.analyze(
+            _build_log_text(req)
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ML Analysis failed: {e}")
+        ml_result = _classification_from_root_cause(root_cause_result)
+        healing_plan = healing_orchestrator.create_plan(
+            root_cause_result
+        )
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail="ML analysis failed.",
+        ) from error
 
     root_cause = ml_result["root_cause"]
     confidence = ml_result["confidence"]
@@ -75,21 +215,188 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
             test_name     = req.test_name,
             root_cause    = root_cause,
             confidence    = confidence,
-            error_message = req.error_message,
-            stack_trace   = req.stack_trace or "",
+            error_message = redact_secrets(
+                req.error_message or ""
+            ),
+            stack_trace   = redact_secrets(
+                req.stack_trace or ""
+            ),
             failure_type  = req.failure_type,
             old_value     = req.old_locator or "",
         )
-    except Exception as e:
+        heal_result.update(
+            {
+                "selected_action": healing_plan["action"],
+                "automatic_execution_allowed":
+                    healing_plan["automatic_execution_allowed"],
+                "requires_validation":
+                    healing_plan["requires_validation"],
+                "confidence_gate_applied":
+                    healing_plan["confidence_gate_applied"],
+                "automation_level": healing_plan["automation_level"],
+                "allowed_to_plan": healing_plan["allowed_to_plan"],
+                "allowed_to_publish": healing_plan["allowed_to_publish"],
+                "notification_required": healing_plan["notification_required"],
+                "target_team_or_module": healing_plan["target_team_or_module"],
+            }
+        )
+        if root_cause != "application_defect":
+            heal_result.update(
+                {
+                    "repair_type": healing_plan["automation_level"].replace(
+                        "_", " "
+                    ).title(),
+                    "recommendation": healing_plan["recommended_action"],
+                    "status": healing_plan["history_status"],
+                    "developer_alert": False,
+                    "old_value": "",
+                    "new_value": "",
+                }
+            )
+    except Exception:
         heal_result = {
             "healing_id":     "H-ERROR",
             "repair_type":    "N/A",
             "old_value":      "",
             "new_value":      "",
-            "recommendation": f"Healing engine error: {e}",
+            "recommendation": "Healing engine processing failed.",
             "status":         "Pending",
             "developer_alert": False,
+            "selected_action": healing_plan["action"],
+            "automatic_execution_allowed":
+                healing_plan["automatic_execution_allowed"],
+            "requires_validation":
+                healing_plan["requires_validation"],
+            "confidence_gate_applied":
+                healing_plan["confidence_gate_applied"],
+            "automation_level": healing_plan["automation_level"],
+            "allowed_to_plan": healing_plan["allowed_to_plan"],
+            "allowed_to_publish": healing_plan["allowed_to_publish"],
+            "notification_required": healing_plan["notification_required"],
+            "target_team_or_module": healing_plan["target_team_or_module"],
         }
+
+    raw_log = req.logs or req.error_message or ""
+    evidence = repair_evidence_override or repair_evidence_service.extract(
+        raw_log,
+        root_cause_result.get("detected_error", {}),
+    )
+    eligibility = RepairEligibilityService(
+        allowed_repositories=project_repair_repositories,
+    ).evaluate(
+        classification=ml_result,
+        healing_plan=healing_plan,
+        source_run=source_run,
+        candidate_file=evidence.candidate_file,
+        candidate_line=evidence.candidate_line,
+    )
+
+    repair_attempt = None
+    notification_audit = None
+    action_audit = None
+    if root_cause in healing_orchestrator.ACTION_MATRIX:
+        attempt_id = (
+            f"REPAIR-{uuid.uuid4().hex[:12].upper()}"
+        )
+        non_application_action = root_cause != "application_defect"
+        test_script_notification = root_cause == "test_script_issue"
+        repair_attempt = RepairAttempt(
+            attempt_id=attempt_id,
+            failure_test_id=test_id,
+            status=(
+                healing_plan["history_status"]
+                if non_application_action
+                else (
+                    "eligible"
+                    if eligibility.eligible
+                    else "ineligible"
+                )
+            ),
+            mode="read_only",
+            eligible=(False if non_application_action else eligibility.eligible),
+            eligibility_code=(
+                healing_plan["automation_level"]
+                if non_application_action
+                else eligibility.code
+            ),
+            eligibility_reason=(
+                f"Forwarded to {TARGET_MODULE}."
+                if test_script_notification
+                else healing_plan["recommended_action"]
+                if non_application_action
+                else eligibility.reason
+            ),
+            predicted_root_cause=root_cause,
+            confidence=confidence,
+            decision_source=(
+                ml_result.get("decision_source")
+                or "machine_learning"
+            ),
+            selected_action=healing_plan["action"],
+            repository_owner=(
+                source_run.get("owner")
+                if source_run
+                else None
+            ),
+            repository_name=(
+                source_run.get("repository")
+                if source_run
+                else None
+            ),
+            run_id=(
+                source_run.get("run_id")
+                if source_run
+                else None
+            ),
+            head_sha=(
+                source_run.get("head_sha")
+                if source_run
+                else None
+            ),
+            head_branch=(
+                source_run.get("head_branch")
+                if source_run
+                else None
+            ),
+            default_branch=(
+                source_run.get("default_branch")
+                if source_run
+                else None
+            ),
+            error_type=evidence.error_type,
+            error_message=(
+                ""
+                if non_application_action
+                else evidence.error_message
+            ),
+            candidate_file=evidence.candidate_file,
+            candidate_line=evidence.candidate_line,
+            log_content_sha256=(
+                evidence.log_content_sha256
+            ),
+            sanitized_log_excerpt=(
+                ""
+                if non_application_action
+                else evidence.sanitized_log_excerpt
+            ),
+            github_changes_made=False,
+        )
+        if test_script_notification:
+            notification_audit = (
+                test_script_notification_service.create_audit(
+                    attempt_id=attempt_id,
+                    confidence=confidence,
+                    source_run=source_run,
+                )
+            )
+        elif non_application_action:
+            action_audit = root_cause_action_audit_service.create_audit(
+                attempt_id=attempt_id,
+                root_cause=root_cause,
+                confidence=confidence,
+                policy=healing_plan,
+                source_run=source_run,
+            )
 
     # ── Step 3: Flaky Test Detection (Local) ───────────────────────────────────
     try:
@@ -114,7 +421,26 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     # ── Step 4: Notification (Local) ───────────────────────────────────────────
     notification_result = None
     developer_alert = heal_result.get("developer_alert", False)
-    if developer_alert:
+    if root_cause == "test_script_issue":
+        notification_result = {
+            "notification_id": notification_audit.notification_id,
+            "status": "notification_sent",
+            "target_module": TARGET_MODULE,
+            "message": NOTIFICATION_MESSAGE,
+            "github_changes_made": False,
+        }
+    elif action_audit:
+        notification_result = {
+            "audit_id": action_audit.audit_id,
+            "status": action_audit.history_status,
+            "automation_level": action_audit.automation_level,
+            "notification_required": action_audit.notification_required,
+            "target_module": action_audit.target_team_or_module,
+            "message": action_audit.recommended_action,
+            "validation_guidance": action_audit.validation_guidance,
+            "github_changes_made": False,
+        }
+    elif developer_alert:
         try:
             notification_result = notifier.create_notification(
                 failure_test_id = test_id,
@@ -127,11 +453,21 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
                 ),
                 target          = "developer",
             )
-        except Exception as e:
-            notification_result = {"status": "failed", "error": str(e)}
+        except Exception:
+            notification_result = {
+                "status": "failed",
+                "error": "Notification processing failed.",
+            }
 
     # ── Step 5: Persist to DB ──────────────────────────────────────────────────
     failure_record = Failure(
+        organization_id  = req.organization_id,
+        project_id       = req.project_id,
+        iteration_id     = req.iteration_id,
+        user_story_id    = req.user_story_id,
+        suite_id         = req.suite_id,
+        execution_id     = req.execution_id,
+        test_run_id      = req.test_run_id,
         test_id          = test_id,
         test_name        = req.test_name,
         pipeline         = req.pipeline,
@@ -139,14 +475,22 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         root_cause       = root_cause,
         confidence       = f"{confidence:.0%}",
         healing          = heal_result.get("status", "Pending"),
-        logs             = req.logs or req.error_message,
-        stack_trace      = req.stack_trace,
+        logs             = evidence.sanitized_log_excerpt,
+        stack_trace      = bounded_sanitized_text(
+            req.stack_trace or "",
+            max_lines=40,
+            max_chars=8000,
+        ),
         recommendation   = heal_result.get("recommendation"),
         developer_alert  = developer_alert,
     )
     db.add(failure_record)
+    if hasattr(db, "flush"):
+        db.flush()
+    failure_id = getattr(failure_record, "id", None)
 
     healing_record = HealingAction(
+        failure_id       = failure_id,
         healing_id       = heal_result.get("healing_id", f"H-{uuid.uuid4().hex[:6].upper()}"),
         failure_test_id  = test_id,
         test_name        = req.test_name,
@@ -157,8 +501,27 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
     )
     db.add(healing_record)
 
+    if repair_attempt:
+        repair_attempt.failure_id = failure_id
+        db.add(repair_attempt)
+        if hasattr(db, "flush"):
+            db.flush()
+        repair_attempt_id = getattr(repair_attempt, "id", None)
+        if notification_audit:
+            notification_audit.repair_attempt_id = repair_attempt_id
+        if action_audit:
+            action_audit.repair_attempt_id = repair_attempt_id
+    if notification_audit:
+        db.add(notification_audit)
+    if action_audit:
+        db.add(action_audit)
+
     if flaky_result.get("is_flaky"):
         flaky_record = FlakyTest(
+            organization_id   = req.organization_id,
+            project_id        = req.project_id,
+            suite_id          = req.suite_id,
+            latest_test_run_id = req.test_run_id,
             test_code        = test_id,
             test_name        = req.test_name,
             instability_score = flaky_result.get("instability_score", "0%"),
@@ -167,8 +530,12 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         )
         db.add(flaky_record)
 
-    if notification_result and notification_result.get("status") == "sent":
+    if (
+        notification_result
+        and notification_result.get("status") == "sent"
+    ):
         notif_record = Notification(
+            failure_id       = failure_id,
             failure_test_id = test_id,
             test_name       = req.test_name,
             root_cause      = root_cause,
@@ -187,26 +554,61 @@ async def analyze_failure(req: AnalyzeRequest, db: Session = Depends(get_db)):
         "status":     "FAIL",
         "pipeline": {
             "classification": ml_result,
+            "source_run":       source_run,
+            "healing_plan":   healing_plan,
             "healing":        heal_result,
             "flaky_analysis": flaky_result,
             "notification":   notification_result,
+            "repair": (
+                {
+                    "attempt_id":
+                        repair_attempt.attempt_id,
+                    "eligible":
+                        repair_attempt.eligible,
+                    "reason":
+                        repair_attempt.eligibility_reason,
+                    "status":
+                        repair_attempt.status,
+                    "mode": "read_only",
+                    "github_changes_made": False,
+                    "automation_level": healing_plan["automation_level"],
+                    "allowed_to_plan": healing_plan["allowed_to_plan"],
+                    "allowed_to_publish": healing_plan["allowed_to_publish"],
+                    "target_module": healing_plan["target_team_or_module"],
+                    "recommended_action": healing_plan["recommended_action"],
+                    "validation_guidance": healing_plan["validation_guidance"],
+                    "history_status": healing_plan["history_status"],
+                }
+                if repair_attempt
+                else None
+            ),
         },
         "saved_to_db": True,
     }
 
+
+# Full pipeline endpoint
+@router.post("/")
+async def analyze_failure(
+    req: AnalyzeRequest,
+    db: Session = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+):
+    return await run_analysis_pipeline(
+        req=req,
+        db=db,
+        authorization=authorization,
+    )
 
 # ── Local Metrics Endpoints ───────────────────────────────────────────────────
 @router.get("/health")
 async def check_services_health():
     # Frontend expects a flat Record<string, { status: string; model?: string; error?: string }>
     # and UI displays it as name.replace("-service", "")
-    metrics = ml.get_metrics()
-    model_name = metrics.get("model_name", "N/A") if metrics else "N/A"
-    
     return {
         "ml-classifier-service": {
-            "status": "ready" if ml.is_ready() else "loading", 
-            "model": model_name
+            "status": "ready",
+            "model": ROOT_CAUSE_MODEL_NAME,
         },
         "healing-engine-service": {"status": "ready"},
         "analytics-service": {"status": "ready"},
@@ -216,10 +618,13 @@ async def check_services_health():
 
 @router.get("/metrics")
 async def get_ml_metrics():
-    metrics = ml.get_metrics()
-    if not metrics:
-        raise HTTPException(status_code=404, detail="No ML metrics available.")
-    return metrics
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            "No metrics artifact is available for "
+            f"{ROOT_CAUSE_MODEL_NAME}."
+        ),
+    )
 
 
 @router.post("/retrain")

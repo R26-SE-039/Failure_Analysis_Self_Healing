@@ -6,15 +6,31 @@ from app.database import get_db
 from app.models.flaky_test import FlakyTest
 from app.schemas.flaky_test import FlakyTestCreate, FlakyTestResponse, PaginatedFlakyTestResponse
 from fastapi import HTTPException
+from app.services.project_scope import ProjectScope, get_project_scope
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 
+def _scope_flaky_query(query, scope: ProjectScope):
+    if not scope.is_scoped:
+        return query
+    return query.filter(
+        FlakyTest.organization_id == scope.organization_id,
+        FlakyTest.project_id == scope.project_id,
+    )
+
+
 @router.get("/flaky-tests", response_model=PaginatedFlakyTestResponse)
-def get_flaky_tests(page: int = 1, limit: int = 10, db: Session = Depends(get_db)):
+def get_flaky_tests(
+    page: int = 1,
+    limit: int = 10,
+    scope: ProjectScope = Depends(get_project_scope),
+    db: Session = Depends(get_db),
+):
     offset = (page - 1) * limit
-    total = db.query(FlakyTest).count()
-    tests = db.query(FlakyTest).order_by(FlakyTest.id.desc()).offset(offset).limit(limit).all()
+    base_query = _scope_flaky_query(db.query(FlakyTest), scope)
+    total = base_query.count()
+    tests = base_query.order_by(FlakyTest.id.desc()).offset(offset).limit(limit).all()
     return {"data": tests, "total": total, "page": page, "limit": limit}
 
 
@@ -28,8 +44,15 @@ def create_flaky_test(payload: FlakyTestCreate, db: Session = Depends(get_db)):
 
 
 @router.delete("/flaky-tests/{test_code}")
-def delete_flaky_test(test_code: str, db: Session = Depends(get_db)):
-    test = db.query(FlakyTest).filter(FlakyTest.test_code == test_code).first()
+def delete_flaky_test(
+    test_code: str,
+    scope: ProjectScope = Depends(get_project_scope),
+    db: Session = Depends(get_db),
+):
+    test = _scope_flaky_query(
+        db.query(FlakyTest).filter(FlakyTest.test_code == test_code),
+        scope,
+    ).first()
     if not test:
         raise HTTPException(status_code=404, detail="Flaky test not found")
     db.delete(test)

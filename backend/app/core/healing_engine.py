@@ -56,10 +56,59 @@ _RECOMMENDATIONS = {
         "Consider mocking external API calls in test environments to isolate "
         "the test from network instability."
     ),
+    "network_issue": (
+        "Network Retry with Backoff",
+        "Retry the job after checking transient network, DNS, and upstream API "
+        "availability. Add exponential backoff where the failing step calls "
+        "external services."
+    ),
+    "dependency_issue": (
+        "Dependency Review",
+        "Review package versions, lockfiles, and package registry availability. "
+        "Regenerate the lockfile or pin the failing dependency before rerunning "
+        "the pipeline."
+    ),
+    "deployment_issue": (
+        "Deployment Review",
+        "Review rollout status, image availability, migration output, and probe "
+        "configuration. Roll back or redeploy after the failing deployment step "
+        "is corrected."
+    ),
+    "infrastructure_resource_issue": (
+        "Resource Review",
+        "Check runner disk, memory, timeout, and quota limits. Increase resources "
+        "or split the job if the pipeline exhausted infrastructure capacity."
+    ),
+    "security_policy_issue": (
+        "Security Policy Review",
+        "Block automatic healing and route the failure to security review. Fix "
+        "the policy, vulnerability, or secret-scanning issue before rerunning."
+    ),
+    "test_script_issue": (
+        "Test Script Repair",
+        "Route the failure to the test script component. Inspect assertions, "
+        "fixtures, locators, waits, and test setup before rerunning the suite."
+    ),
+    "workflow_environment_issue": (
+        "Workflow Configuration Review",
+        "Check workflow paths, environment variables, permissions, and working "
+        "directory configuration. Update the CI job configuration before rerun."
+    ),
+    "other_or_unknown": (
+        "Manual Review",
+        "The classifier could not isolate a precise repair path. Review the "
+        "captured log excerpt and route the failure manually."
+    ),
+    "manual_review": (
+        "Manual Review",
+        "ML confidence is below the automation threshold and no deterministic "
+        "rule confirmed a repair path. Route this failure for manual review."
+    ),
     "application_defect": (
-        "Developer Alert",
-        "This failure indicates an application-level defect. No automated repair "
-        "is possible. A bug report has been raised for the development team."
+        "Controlled Read-Only Repair Plan",
+        "This failure indicates an application-level defect. Controlled MCP "
+        "investigation is available after explicit confirmation. Phase 1 "
+        "proposes a bounded repair plan without changing GitHub."
     ),
 }
 
@@ -128,17 +177,86 @@ def heal(
         status = "Pending"
         developer_alert = True
 
-    elif rc == "network_api_error":
+    elif rc in {"network_api_error", "network_issue"}:
         broken = old_value or "direct API call without retry"
         new_val = "retry with exponential backoff (max 3 attempts)"
-        repair_type, recommendation = _RECOMMENDATIONS["network_api_error"]
+        repair_type, recommendation = _RECOMMENDATIONS.get(
+            rc,
+            _RECOMMENDATIONS["network_api_error"],
+        )
         status = "Pending"
         developer_alert = True
 
-    else:  # application_defect — no auto-heal
-        broken = old_value or "N/A"
-        new_val = "N/A — requires developer fix"
+    elif rc == "test_script_issue":
+        broken = old_value or "failing test script"
+        new_val = "send to test script repair component"
+        repair_type, recommendation = _RECOMMENDATIONS["test_script_issue"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "dependency_issue":
+        broken = old_value or "dependency or lockfile"
+        new_val = "pin dependency or regenerate lockfile"
+        repair_type, recommendation = _RECOMMENDATIONS["dependency_issue"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "workflow_environment_issue":
+        broken = old_value or "workflow environment configuration"
+        new_val = "update CI environment configuration"
+        repair_type, recommendation = _RECOMMENDATIONS["workflow_environment_issue"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "infrastructure_resource_issue":
+        broken = old_value or "runner resource limit"
+        new_val = "increase resources or split pipeline job"
+        repair_type, recommendation = _RECOMMENDATIONS["infrastructure_resource_issue"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "deployment_issue":
+        broken = old_value or "deployment step"
+        new_val = "rollback or redeploy after correction"
+        repair_type, recommendation = _RECOMMENDATIONS["deployment_issue"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "security_policy_issue":
+        broken = old_value or "security policy gate"
+        new_val = "manual security review required"
+        repair_type, recommendation = _RECOMMENDATIONS["security_policy_issue"]
+        status = "Rejected"
+        developer_alert = True
+
+    elif rc == "other_or_unknown":
+        broken = old_value or "unknown failure signal"
+        new_val = "manual triage required"
+        repair_type, recommendation = _RECOMMENDATIONS["other_or_unknown"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "manual_review":
+        broken = old_value or "low-confidence failure signal"
+        new_val = "manual triage required"
+        repair_type, recommendation = _RECOMMENDATIONS["manual_review"]
+        status = "Pending"
+        developer_alert = True
+
+    elif rc == "application_defect":
+        broken = old_value or "application source defect"
+        new_val = "generate a read-only bounded repair proposal"
         repair_type, recommendation = _RECOMMENDATIONS["application_defect"]
+        status = "Suggested"
+        developer_alert = True
+
+    else:
+        broken = old_value or "N/A"
+        new_val = "N/A - requires developer fix"
+        repair_type, recommendation = _RECOMMENDATIONS.get(
+            rc,
+            _RECOMMENDATIONS["application_defect"],
+        )
         status = "Rejected"
         developer_alert = True
 

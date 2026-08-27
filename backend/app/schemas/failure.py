@@ -1,9 +1,17 @@
 from typing import Optional
 from datetime import datetime
+from uuid import UUID
 from pydantic import BaseModel
 
 
 class FailureBase(BaseModel):
+    organization_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    iteration_id: Optional[UUID] = None
+    user_story_id: Optional[UUID] = None
+    suite_id: Optional[UUID] = None
+    execution_id: Optional[UUID] = None
+    test_run_id: Optional[UUID] = None
     test_id: str
     test_name: str
     pipeline: str
