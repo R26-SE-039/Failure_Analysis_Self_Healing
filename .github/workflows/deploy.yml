@@ -1,14 +1,16 @@
 name: deploy
 # Auto-deploy to the NextGenQA EC2 box on push to the deploy branch.
-# Runs on the self-hosted runner installed ON the box, so no inbound SSH is
-# needed. This repo backs TWO services (failure + repair-agent), so both are
-# rebuilt. The other containers keep running.
+# Runs on the self-hosted runner ON the box (no inbound SSH). The code is
+# fetched via actions/checkout using the ephemeral GITHUB_TOKEN — so NO
+# personal access token needs to live on the box, and revoking any PAT can't
+# break this. rsync copies the checked-out code into the deployed folder
+# (preserving the gitignored .env files + the tracked research/models joblib),
+# then rebuilds BOTH services this repo backs (failure + repair-agent).
 on:
   push:
     branches: [feature/aws-deploy]
-  workflow_dispatch:            # also allow a manual "Run workflow" click
+  workflow_dispatch:
 
-# One deploy of this repo at a time (the single runner serializes across repos).
 concurrency:
   group: deploy-failure
   cancel-in-progress: false
@@ -17,13 +19,15 @@ jobs:
   deploy:
     runs-on: [self-hosted, nextgenqa]
     steps:
-      - name: Update the deployed clone
+      - name: Check out the pushed code
+        uses: actions/checkout@v4
+        with:
+          ref: feature/aws-deploy
+
+      - name: Sync code into the deploy folder
         run: |
           set -euo pipefail
-          cd ~/Failure_Analysis_Self_Healing
-          git fetch --prune origin
-          git checkout feature/aws-deploy
-          git reset --hard origin/feature/aws-deploy
+          rsync -a --exclude='.git/' --exclude='.env' --exclude='backend/.env' --exclude='repair-agent/.env' ./ ~/Failure_Analysis_Self_Healing/
 
       - name: Rebuild & restart the services
         run: |
