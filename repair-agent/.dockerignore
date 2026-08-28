@@ -1,0 +1,16 @@
+# Secrets come from compose env_file at runtime, never baked into the image.
+.env
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+env/
+.git/
+*.log
+
+# Not part of the active runtime (README: retained but not imported):
+legacy/
+workspaces/
+tests/
+test_github_mcp.py
+live_phase1_diagnostic.py

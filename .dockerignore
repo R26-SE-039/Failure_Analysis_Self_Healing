@@ -1,0 +1,20 @@
+# Keep the image lean. NOTE: research/models/ is REQUIRED (the joblib the
+# service loads) — only the heavy research data/scripts are excluded.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.venv/
+**/venv/
+**/env/
+.git/
+.env
+**/.env
+*.log
+*.sqlite
+*.db
+
+# Not needed at runtime for the failure-analysis service:
+docs/
+repair-agent/
+research/data/
+research/scripts/
