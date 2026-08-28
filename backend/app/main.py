@@ -198,3 +198,9 @@ def root():
     }
 
 
+# ── Root health probe (for the API gateway's /health/services aggregator) ─────
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
