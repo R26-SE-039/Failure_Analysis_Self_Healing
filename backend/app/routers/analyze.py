@@ -58,6 +58,72 @@ router = APIRouter(prefix="/analyze", tags=["Analysis Pipeline"])
 ROOT_CAUSE_MODEL_NAME = "best_9class_root_cause_model.joblib"
 
 
+def _generic_notification_exists(
+    db: Session,
+    *,
+    failure_id: Optional[int],
+    root_cause: str,
+    target: str,
+) -> bool:
+    if failure_id is None:
+        return False
+
+    for item in getattr(db, "new", []):
+        if (
+            isinstance(item, Notification)
+            and item.failure_id == failure_id
+            and item.root_cause == root_cause
+            and item.target == target
+        ):
+            return True
+
+    if not hasattr(db, "query"):
+        return False
+
+    return (
+        db.query(Notification)
+        .filter(
+            Notification.failure_id == failure_id,
+            Notification.root_cause == root_cause,
+            Notification.target == target,
+        )
+        .first()
+        is not None
+    )
+
+
+def _add_test_script_generic_notification(
+    db: Session,
+    *,
+    failure_id: Optional[int],
+    test_id: str,
+    test_name: str,
+    notification_result: Optional[dict],
+) -> Optional[Notification]:
+    if not notification_result:
+        return None
+
+    target = notification_result.get("target_module") or TARGET_MODULE
+    if _generic_notification_exists(
+        db,
+        failure_id=failure_id,
+        root_cause="test_script_issue",
+        target=target,
+    ):
+        return None
+
+    notification = Notification(
+        failure_id=failure_id,
+        failure_test_id=test_id,
+        test_name=test_name,
+        root_cause="test_script_issue",
+        message=notification_result.get("message", NOTIFICATION_MESSAGE),
+        target=target,
+    )
+    db.add(notification)
+    return notification
+
+
 # ── Request schema for the analyze endpoint ────────────────────────────────────
 class AnalyzeRequest(BaseModel):
     organization_id: UUID
@@ -513,6 +579,13 @@ async def run_analysis_pipeline(
             action_audit.repair_attempt_id = repair_attempt_id
     if notification_audit:
         db.add(notification_audit)
+        _add_test_script_generic_notification(
+            db,
+            failure_id=failure_id,
+            test_id=test_id,
+            test_name=req.test_name,
+            notification_result=notification_result,
+        )
     if action_audit:
         db.add(action_audit)
 

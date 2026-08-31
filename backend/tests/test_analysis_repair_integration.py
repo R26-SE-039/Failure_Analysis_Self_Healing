@@ -1,17 +1,29 @@
 import hashlib
 import os
+import tempfile
 import unittest
 from pathlib import Path
+from uuid import uuid4
 from unittest.mock import AsyncMock, patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
 from app.models.failure import Failure
+from app.models.notification import Notification
 from app.models.repair_attempt import RepairAttempt
 from app.models.test_script_notification_audit import (
     TestScriptNotificationAudit,
 )
 from app.models.root_cause_action_audit import RootCauseActionAudit
-from app.routers.analyze import analyze_failure
+from app.routers.analyze import (
+    _add_test_script_generic_notification,
+    analyze_failure,
+)
+from app.routers.notifications import get_notifications
 from app.services.project_configuration_client import ProjectGitHubConfiguration
+from app.services.project_scope import ProjectScope
 from tests.test_classifier_regression import _frontend_request
 
 
@@ -24,9 +36,16 @@ class FakeDatabase:
     def __init__(self):
         self.added = []
         self.commits = 0
+        self._next_id = 1
 
     def add(self, value):
         self.added.append(value)
+
+    def flush(self):
+        for item in self.added:
+            if hasattr(item, "id") and getattr(item, "id", None) is None:
+                setattr(item, "id", self._next_id)
+                self._next_id += 1
 
     def commit(self):
         self.commits += 1
@@ -196,6 +215,14 @@ class AnalysisRepairIntegrationTests(
             for item in database.added
             if isinstance(item, TestScriptNotificationAudit)
         )
+        generic_notification = next(
+            item
+            for item in database.added
+            if isinstance(item, Notification)
+        )
+        failure = next(
+            item for item in database.added if isinstance(item, Failure)
+        )
         self.assertFalse(attempt.eligible)
         self.assertEqual(attempt.status, "notification_sent")
         self.assertFalse(attempt.github_changes_made)
@@ -204,6 +231,18 @@ class AnalysisRepairIntegrationTests(
         self.assertEqual(
             notification.target_module,
             "Test Script Generation Module",
+        )
+        self.assertEqual(generic_notification.failure_id, failure.id)
+        self.assertEqual(generic_notification.failure_test_id, result["test_id"])
+        self.assertEqual(generic_notification.test_name, request.test_name)
+        self.assertEqual(generic_notification.root_cause, "test_script_issue")
+        self.assertEqual(
+            generic_notification.target,
+            "Test Script Generation Module",
+        )
+        self.assertEqual(
+            generic_notification.message,
+            "Forward this failure to the test script generation owner for inspection/regeneration.",
         )
         self.assertEqual(
             result["pipeline"]["notification"]["status"],
@@ -219,6 +258,91 @@ class AnalysisRepairIntegrationTests(
         self.assertNotIn(raw_log, serialized)
         self.assertNotIn("token", serialized.lower())
 
+    def test_test_script_generic_notification_bridge_is_scoped_and_idempotent(self):
+        org_id = uuid4()
+        project_a = uuid4()
+        project_b = uuid4()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "notifications.db"
+            engine = create_engine(
+                f"sqlite:///{db_path.as_posix()}",
+                connect_args={"check_same_thread": False},
+            )
+            Base.metadata.create_all(bind=engine)
+            SessionLocal = sessionmaker(
+                autocommit=False,
+                autoflush=False,
+                bind=engine,
+            )
+            try:
+                with SessionLocal() as db:
+                    failure = Failure(
+                        organization_id=org_id,
+                        project_id=project_a,
+                        test_id="TEST-SCRIPT-001",
+                        test_name="Test script notification bridge",
+                        pipeline="GitHub Actions",
+                        status="FAIL",
+                        root_cause="test_script_issue",
+                    )
+                    db.add(failure)
+                    db.flush()
+
+                    notification_result = {
+                        "status": "notification_sent",
+                        "target_module": "Test Script Generation Module",
+                        "message": (
+                            "Forward this failure to the test script generation owner "
+                            "for inspection/regeneration."
+                        ),
+                    }
+                    first = _add_test_script_generic_notification(
+                        db,
+                        failure_id=failure.id,
+                        test_id=failure.test_id,
+                        test_name=failure.test_name,
+                        notification_result=notification_result,
+                    )
+                    second = _add_test_script_generic_notification(
+                        db,
+                        failure_id=failure.id,
+                        test_id=failure.test_id,
+                        test_name=failure.test_name,
+                        notification_result=notification_result,
+                    )
+                    db.commit()
+
+                    self.assertIsNotNone(first)
+                    self.assertIsNone(second)
+                    rows = db.query(Notification).all()
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(rows[0].root_cause, "test_script_issue")
+                    self.assertEqual(rows[0].failure_id, failure.id)
+                    self.assertEqual(rows[0].target, "Test Script Generation Module")
+
+                    project_a_response = get_notifications(
+                        scope=ProjectScope(
+                            organization_id=org_id,
+                            project_id=project_a,
+                        ),
+                        db=db,
+                    )
+                    self.assertEqual(project_a_response["total"], 1)
+                    self.assertEqual(
+                        project_a_response["data"][0].root_cause,
+                        "test_script_issue",
+                    )
+
+                    project_b_response = get_notifications(
+                        scope=ProjectScope(
+                            organization_id=org_id,
+                            project_id=project_b,
+                        ),
+                        db=db,
+                    )
+                    self.assertEqual(project_b_response["total"], 0)
+            finally:
+                engine.dispose()
     async def test_remaining_root_causes_record_safe_action_statuses(self):
         expected = {
             "dependency_issue": "dependency_review_required",
