@@ -130,6 +130,32 @@ class HealingOrchestratorTests(unittest.TestCase):
         self.assertTrue(plan["confidence_gate_applied"])
         self.assertFalse(plan["automatic_execution_allowed"])
 
+    def test_confidence_gate_boundary_is_sixty_percent(self):
+        below = self.orchestrator.create_plan(
+            {
+                "final_root_cause": "application_defect",
+                "ml_confidence_percentage": 59.99,
+                "decision_source": "machine_learning",
+            }
+        )
+        at_boundary = self.orchestrator.create_plan(
+            {
+                "final_root_cause": "application_defect",
+                "ml_confidence_percentage": 60.00,
+                "decision_source": "machine_learning",
+            }
+        )
+
+        self.assertEqual(below["action"], "manual_review")
+        self.assertTrue(below["confidence_gate_applied"])
+        self.assertFalse(below["automatic_execution_allowed"])
+
+        self.assertEqual(
+            at_boundary["action"],
+            "start_mcp_code_repair",
+        )
+        self.assertFalse(at_boundary["confidence_gate_applied"])
+        self.assertTrue(at_boundary["allowed_to_plan"])
 
 if __name__ == "__main__":
     unittest.main()
