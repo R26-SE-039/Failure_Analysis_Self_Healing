@@ -209,6 +209,38 @@ class RepairPublisherTests(unittest.IsolatedAsyncioTestCase):
             "line 1\nreturn User(name=name)\nline 3\n",
         )
 
+    async def test_rejects_confidence_below_sixty_percent_before_github_write(self):
+        client = FakePublishMcpClient()
+        publisher = RepairPublisher(
+            settings=settings(),
+            mcp_client_factory=lambda: client,
+        )
+
+        with self.assertRaises(RepairPublishFailure) as raised:
+            await publisher.publish(
+                request().model_copy(update={"confidence": 0.5999})
+            )
+
+        self.assertEqual(raised.exception.code, "publish_safety_failed")
+        self.assertEqual(client.calls, [])
+
+    async def test_accepts_confidence_at_sixty_percent_gate(self):
+        client = FakePublishMcpClient()
+        publisher = RepairPublisher(
+            settings=settings(),
+            mcp_client_factory=lambda: client,
+        )
+
+        result = await publisher.publish(
+            request().model_copy(update={"confidence": 0.6000})
+        )
+
+        self.assertEqual(result.publish_status, "draft_pr_created")
+        self.assertFalse(result.automatic_merge_performed)
+        self.assertEqual(
+            [name for name, _ in client.calls].count("push_files"),
+            1,
+        )
 
 if __name__ == "__main__":
     unittest.main()

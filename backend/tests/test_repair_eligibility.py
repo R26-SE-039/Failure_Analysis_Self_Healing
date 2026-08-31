@@ -130,6 +130,55 @@ class RepairEligibilityTests(unittest.TestCase):
             ).eligible
         )
 
+    def test_rejects_wrong_selected_action_and_confidence_gate(self):
+        wrong_action = healing_plan()
+        wrong_action["action"] = "manual_review"
+        gated = healing_plan()
+        gated["confidence_gate_applied"] = True
+
+        action_result = self.service.evaluate(
+            classification=classification(),
+            healing_plan=wrong_action,
+            source_run=source_run(),
+            candidate_file="app/user_service.py",
+            candidate_line=10,
+        )
+        gated_result = self.service.evaluate(
+            classification=classification(),
+            healing_plan=gated,
+            source_run=source_run(),
+            candidate_file="app/user_service.py",
+            candidate_line=10,
+        )
+
+        self.assertFalse(action_result.eligible)
+        self.assertEqual(action_result.code, "route_not_selected")
+        self.assertFalse(gated_result.eligible)
+        self.assertEqual(gated_result.code, "confidence_gate")
+
+    def test_rejects_missing_branch_and_invalid_candidate_line(self):
+        no_branch = source_run()
+        no_branch["head_branch"] = ""
+
+        missing_branch = self.service.evaluate(
+            classification=classification(),
+            healing_plan=healing_plan(),
+            source_run=no_branch,
+            candidate_file="app/user_service.py",
+            candidate_line=10,
+        )
+        invalid_line = self.service.evaluate(
+            classification=classification(),
+            healing_plan=healing_plan(),
+            source_run=source_run(),
+            candidate_file="app/user_service.py",
+            candidate_line=0,
+        )
+
+        self.assertFalse(missing_branch.eligible)
+        self.assertEqual(missing_branch.code, "missing_branch")
+        self.assertFalse(invalid_line.eligible)
+        self.assertEqual(invalid_line.code, "missing_failed_line")
 
 if __name__ == "__main__":
     unittest.main()

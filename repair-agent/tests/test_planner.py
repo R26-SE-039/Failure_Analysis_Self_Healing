@@ -10,6 +10,7 @@ from repair_agent.schemas import (
     ProviderRepairPlan,
     RepairPlanRequest,
 )
+from repair_agent.security import SecurityError
 
 
 def settings() -> Settings:
@@ -218,6 +219,33 @@ class RepairPlannerTests(
             diagnostics["boolean_flags"]["after_excerpt_present"]
         )
 
+    async def test_rejects_confidence_below_sixty_percent_gate(self):
+        planner = RepairPlanner(
+            settings=settings(),
+            provider=FakeProvider(),
+            mcp_client_factory=FakeMcpClient,
+        )
+
+        with self.assertRaises(SecurityError) as raised:
+            await planner.create_plan(
+                request().model_copy(update={"confidence": 0.5999})
+            )
+
+        self.assertEqual(str(raised.exception), "Confidence gate did not pass.")
+
+    async def test_accepts_confidence_at_sixty_percent_gate(self):
+        planner = RepairPlanner(
+            settings=settings(),
+            provider=FakeProvider(),
+            mcp_client_factory=FakeMcpClient,
+        )
+
+        result = await planner.create_plan(
+            request().model_copy(update={"confidence": 0.6000})
+        )
+
+        self.assertEqual(result.status, "planned")
+        self.assertFalse(result.github_changes_made)
 
 if __name__ == "__main__":
     unittest.main()
